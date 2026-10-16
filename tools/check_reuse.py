@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: EUPL-1.2
 """REUSE gate with a planted-defect selftest.
 
-check:    reuse lint over the repository.
+check:    reuse lint over the repository; on failure every finding is printed,
+          one per line (reuse lint --lines), never hidden.
 selftest: copies the repository's tracked and unignored files into a scratch
-          directory, plants one file without licence information, and passes
-          only when reuse lint refuses the copy and accepts the unplanted copy.
+          git repository, so .gitignore applies there as it does here. The copy
+          passes with a planted gate receipt (.standards-receipt.json, ignored by
+          the managed block) and fails with a planted file without licence
+          information, whose path the printed findings must name.
 """
 import shutil
 import subprocess
@@ -19,8 +22,10 @@ TIMEOUT = 120
 
 
 def lint(root):
-    cmd = ["reuse", "--root", str(root), "lint", "--quiet"]
-    return subprocess.run(cmd, cwd=root, timeout=TIMEOUT, check=False).returncode
+    """(return code, findings text) of reuse lint over root."""
+    cmd = ["reuse", "--root", str(root), "lint", "--lines"]
+    done = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=TIMEOUT, check=False)
+    return done.returncode, (done.stdout + done.stderr).strip()
 
 
 def listed_files():
@@ -37,18 +42,27 @@ def copy_tree(dest):
             shutil.copy2(src, dest / rel)
 
 
+def scratch_repository(dest):
+    """Copy the tree into dest and make it a git repository, so .gitignore holds there."""
+    copy_tree(dest)
+    subprocess.run(["git", "init", "-q", str(dest)], timeout=TIMEOUT, check=True)
+
+
 def selftest():
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp)
-        copy_tree(dest)
-        if lint(dest) != 0:
-            print("selftest: unplanted copy refused", file=sys.stderr)
+        scratch_repository(dest)
+        (dest / ".standards-receipt.json").write_text("{}\n")
+        rc, out = lint(dest)
+        if rc != 0:
+            print(f"selftest: copy with a gate receipt refused:\n{out}", file=sys.stderr)
             return 1
         (dest / "planted_unlicensed.txt").write_text("no licence information\n")
-        if lint(dest) == 0:
-            print("selftest: planted file without licence passed", file=sys.stderr)
+        rc, out = lint(dest)
+        if rc == 0 or "planted_unlicensed.txt" not in out:
+            print(f"selftest: planted file without licence passed or was not named:\n{out}", file=sys.stderr)
             return 1
-    print("selftest: reuse lint refused the planted file")
+    print("selftest: gate receipt ignored; reuse lint refused the planted file and named it")
     return 0
 
 
@@ -58,7 +72,10 @@ def main(argv):
     if argv[1:]:
         print("usage: check_reuse.py [selftest]", file=sys.stderr)
         return 2
-    return lint(ROOT)
+    rc, out = lint(ROOT)
+    if rc != 0:
+        print(out, file=sys.stderr)
+    return rc
 
 
 if __name__ == "__main__":
