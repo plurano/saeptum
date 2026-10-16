@@ -215,6 +215,82 @@ fn a_missing_binary_or_occupied_directory_is_refused() -> Fallible {
     Ok(())
 }
 
+/// Negative: a socket path that cannot be connected for a reason other than
+/// "not there yet" fails the handshake with an I/O error, not a retry.
+#[test]
+fn an_unusable_socket_path_is_an_io_refusal() -> Fallible {
+    let dir = scratch("unusable")?;
+    let mut vm = start(&dir, STAYS_UP)?;
+    // A symbolic link to itself: connect fails with ELOOP, also as root.
+    std::os::unix::fs::symlink(vm.socket(), vm.socket())?;
+    let outcome = vm.exchange(PORT, "evaluate", 64);
+    assert!(
+        matches!(
+            outcome,
+            Err(MicroVmError::Io {
+                what: "connecting to the vsock socket",
+                ..
+            })
+        ),
+        "{outcome:?}"
+    );
+    vm.stop()?;
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+/// Negative: dropping a running VM without stopping terminates its process.
+#[test]
+fn dropping_a_running_vm_terminates_its_process() -> Fallible {
+    let dir = scratch("drop")?;
+    let vm = start(&dir, "echo $$; exec sleep 30")?;
+    let console_path = vm.dir().join("console.log");
+    let mut pid = String::new();
+    for _ in 0..1_000 {
+        pid = std::fs::read_to_string(&console_path).unwrap_or_default();
+        if !pid.trim().is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let pid = pid.trim();
+    assert_ne!(pid, "");
+    let proc_path = format!("/proc/{pid}");
+    assert!(std::path::Path::new(&proc_path).exists());
+    drop(vm);
+    assert!(!std::path::Path::new(&proc_path).exists());
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+/// Negative: a silent device misses the handshake deadline.
+#[test]
+fn a_silent_device_times_out_the_handshake() -> Fallible {
+    let dir = scratch("silent")?;
+    let mut vm = start(&dir, STAYS_UP)?;
+    let listener = UnixListener::bind(vm.socket())?;
+    let _device = std::thread::spawn(move || {
+        let Ok((_stream, _)) = listener.accept() else {
+            return;
+        };
+        std::thread::sleep(std::time::Duration::from_millis(3_000));
+    });
+    let outcome = vm.exchange(PORT, "evaluate", 64);
+    assert!(
+        matches!(
+            outcome,
+            Err(MicroVmError::Deadline {
+                what: "the vsock handshake",
+                millis: 1000,
+            })
+        ),
+        "{outcome:?}"
+    );
+    vm.stop()?;
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
 // --- Boundary -------------------------------------------------------------
 
 /// Boundary: an answer of exactly its bound is read; one byte more is not.

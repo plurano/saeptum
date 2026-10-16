@@ -59,6 +59,7 @@ fn a_malformed_acknowledgement_is_refused() {
         "NO 1\n",
         "OK 12",
         "OK -1\n",
+        "OK +5\n",
         "OK 99999999999\n",
         "ok 1\n",
     ] {
@@ -102,6 +103,60 @@ fn a_silent_peer_misses_the_deadline() -> Fallible {
     assert!(!timed_out(&std::io::Error::from(
         std::io::ErrorKind::BrokenPipe
     )));
+    Ok(())
+}
+
+/// Negative: a read on an exhausted budget fails at its deadline.
+#[test]
+fn an_exhausted_budget_misses_the_deadline() {
+    let mut stream = Cursor::new(b"OK 7\n".to_vec());
+    let outcome = read_line(&mut stream, MAX_ACK_BYTES, Duration::ZERO, "zero budget");
+    assert!(
+        matches!(outcome, Err(MicroVmError::Deadline { .. })),
+        "{outcome:?}"
+    );
+}
+
+/// A reader returning an error on first read, then data.
+struct SingleErrorReader {
+    error: Option<std::io::Error>,
+    data: Cursor<Vec<u8>>,
+}
+
+impl Read for SingleErrorReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(err) = self.error.take() {
+            return Err(err);
+        }
+        self.data.read(buf)
+    }
+}
+
+/// Negative: interrupted reads are retried, while other I/O errors fail without deadline confusion.
+#[test]
+fn interrupted_reads_retry_and_io_errors_fail() -> Fallible {
+    let mut interrupted = SingleErrorReader {
+        error: Some(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "interrupted",
+        )),
+        data: Cursor::new(b"OK 7\n".to_vec()),
+    };
+    let line = read_line(&mut interrupted, MAX_ACK_BYTES, AMPLE, "interrupted read")?;
+    assert_eq!(line, Ok("OK 7\n".to_owned()));
+
+    let mut denied = SingleErrorReader {
+        error: Some(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        )),
+        data: Cursor::new(b"OK 7\n".to_vec()),
+    };
+    let outcome = read_line(&mut denied, MAX_ACK_BYTES, AMPLE, "denied read");
+    assert!(
+        matches!(outcome, Err(MicroVmError::Io { .. })),
+        "{outcome:?}"
+    );
     Ok(())
 }
 

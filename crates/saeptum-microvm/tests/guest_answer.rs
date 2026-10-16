@@ -16,7 +16,7 @@ mod common;
 
 use std::io::Cursor;
 
-use saeptum_microvm::{MicroVmError, Responder, Service, answer};
+use saeptum_microvm::{MicroVmError, Responder, Service, VMADDR_CID_ANY, answer, serve};
 
 use common::{FIRST_CID, Fallible, PORT};
 
@@ -83,6 +83,27 @@ fn a_malformed_request_is_refused() {
             "{request:?}"
         );
     }
+}
+
+/// Negative: binding on an already-occupied vsock port is refused.
+#[test]
+fn an_occupied_or_inadmissible_vsock_port_is_refused() {
+    let service = Service {
+        port: PORT,
+        max_request_bytes: 64,
+    };
+    let _occupier = socket2::Socket::new(socket2::Domain::VSOCK, socket2::Type::STREAM, None)
+        .and_then(|socket| {
+            socket.bind(&socket2::SockAddr::vsock(VMADDR_CID_ANY, PORT))?;
+            socket.listen(1)?;
+            Ok(socket)
+        });
+    let mut log = Vec::new();
+    let outcome = serve(service, &mut log, &mut shout);
+    assert!(
+        matches!(outcome, Err(MicroVmError::Io { .. })),
+        "{outcome:?}"
+    );
 }
 
 // --- Boundary -------------------------------------------------------------
