@@ -33,23 +33,38 @@ jobs:
         if: github.event.pull_request.draft != true
         uses: actions/checkout@v4
 
+      # Hand edit until the engine's rust-systems template carries this guard
+      # (praetor order engine-flavor-ci-no-manifest-guard-1723): with no root
+      # Cargo.toml there is no crate to check, so the cargo steps are skipped
+      # with the reason printed; the first crate turns them on.
+      - name: Detect the Cargo workspace
+        id: manifest
+        if: github.event.pull_request.draft != true
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No root Cargo.toml yet: cargo fmt, clippy and test skipped until the first crate lands."
+          fi
+
       # rustup ships on the hosted runner image, so the toolchain needs no
       # third-party action.
       - name: Install the stable toolchain
-        if: github.event.pull_request.draft != true
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: |
           rustup toolchain install stable --profile minimal \
             --component clippy,rustfmt
           rustup default stable
 
       - name: Check formatting
-        if: github.event.pull_request.draft != true
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo fmt --all -- --check
 
       - name: Lint
-        if: github.event.pull_request.draft != true
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test
-        if: github.event.pull_request.draft != true
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo test --all-features
