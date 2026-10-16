@@ -8,6 +8,17 @@ name: CI
     branches: ['main']
   merge_group:
 
+env:
+  # cargo-deny runs the licence allow-list of deny.toml. The digest is the one
+  # its release page publishes for the Linux archive of this version.
+  CARGO_DENY_VERSION: "0.20.2"
+  CARGO_DENY_SHA256_LINUX: "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+  # cargo-mutants tests the tests: it changes the code a pull request
+  # touches and expects a test to fail. The digest is the one its release
+  # publishes for the Linux archive of this version.
+  CARGO_MUTANTS_VERSION: "27.1.0"
+  CARGO_MUTANTS_SHA256_LINUX: "dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e"
+
 jobs:
   test:
     runs-on: ubuntu-26.04
@@ -68,3 +79,81 @@ jobs:
       - name: Test
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo test --all-features
+
+      # The archive is held to its pinned digest before anything of it is
+      # unpacked; a changed archive fails the comparison.
+      - name: Install the pinned cargo-deny
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
+        run: |
+          archive="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --max-time 120 \
+            --output "${archive}.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${archive}.tar.gz"
+          echo "${CARGO_DENY_SHA256_LINUX}  ${archive}.tar.gz" | sha256sum -c -
+          mkdir -p bin
+          tar -xzf "${archive}.tar.gz" "${archive}/cargo-deny"
+          install -m 0755 "${archive}/cargo-deny" bin/cargo-deny
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # The allow-list over the locked graph, then the planted crate under
+      # tools/deny/refused, which the check has to refuse.
+      - name: Licence check
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
+        run: make licences
+
+  mutants:
+    name: Mutation testing (changed code)
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # With no toolchain argument rustup installs the channel
+      # rust-toolchain.toml pins.
+      - name: Materialise the pinned Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update --profile minimal
+          rustup show active-toolchain
+
+      - name: Install cargo-mutants
+        run: |
+          archive=cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
+          curl --fail --silent --show-error --location --max-time 120 -o "$archive" \
+            "https://github.com/sourcefrog/cargo-mutants/releases/download/v${CARGO_MUTANTS_VERSION}/${archive}"
+          echo "${CARGO_MUTANTS_SHA256_LINUX}  ${archive}" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" cargo-mutants
+          rm "$archive"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Mutate the changed code
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cargo mutants --version
+          git diff "$BASE_SHA...$HEAD_SHA" -- '*.rs' > "$RUNNER_TEMP/pr.diff"
+          if [ ! -s "$RUNNER_TEMP/pr.diff" ]; then
+            echo "No Rust change; nothing to mutate." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          cargo mutants --in-diff "$RUNNER_TEMP/pr.diff" --timeout 300 \
+            --all-features --cargo-arg=--locked -o "$RUNNER_TEMP"
+
+      - name: Summarise missed mutants
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/mutants.out"
+          [ -d "$out" ] || exit 0
+          for kind in caught missed timeout unviable; do
+            printf '%s: %s\n' "$kind" "$(wc -l < "$out/$kind.txt")"
+          done >> "$GITHUB_STEP_SUMMARY"
+          if [ -s "$out/missed.txt" ]; then
+            { echo '```'; cat "$out/missed.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi

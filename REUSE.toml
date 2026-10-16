@@ -51,7 +51,7 @@ SPDX-License-Identifier = "EUPL-1.2"
 
 # Cargo writes the lock file and gives it no room for a header.
 [[annotations]]
-path = ["Cargo.lock"]
+path = ["Cargo.lock", "tools/deny/refused/Cargo.lock"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
