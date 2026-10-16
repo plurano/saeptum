@@ -97,6 +97,20 @@ pub fn serve<R: Responder>(
         .and_then(|()| listener.set_read_timeout(Some(ACCEPT_BUDGET)))
         .map_err(|error| MicroVmError::io("listening on the AF_VSOCK port", error))?;
     let _ = writeln!(log, "guest: listening on vsock port {}", service.port);
+    accept_loop(&listener, service, log, responder)
+}
+
+/// Answers on `listener`, which already listens and carries its accept
+/// timeout, until [`MAX_GUEST_CONNECTIONS`] or that timeout.
+///
+/// [`serve`] calls it on its `AF_VSOCK` listener; the tests below call it on
+/// a Unix-domain one, which a host without a guest can create.
+pub(crate) fn accept_loop<R: Responder>(
+    listener: &Socket,
+    service: Service,
+    log: &mut dyn Write,
+    responder: &mut R,
+) -> Result<u32, MicroVmError> {
     let mut served = 0_u32;
     for _ in 0..MAX_GUEST_CONNECTIONS {
         match listener.accept() {
@@ -187,4 +201,105 @@ pub fn answer<In: Read, Out: Write, R: Responder>(
 /// Folds a refusal onto one line, so it cannot break the framing.
 fn single_line(text: &str) -> String {
     text.replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    //! The accept loop on a Unix-domain listener: a host without a guest
+    //! reaches every arm of it this way.
+
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use socket2::{Domain, SockAddr, Socket, Type};
+
+    use super::{Service, accept_loop};
+    use crate::error::MicroVmError;
+
+    type Fallible = Result<(), Box<dyn std::error::Error>>;
+
+    const SERVICE: Service = Service {
+        port: 5_000,
+        max_request_bytes: 64,
+    };
+
+    /// A fresh socket path for `name`, unique to this process.
+    fn socket_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("saeptum-guest-{name}-{}.sock", std::process::id()))
+    }
+
+    /// A Unix-domain listener on `path` whose accept times out after
+    /// `timeout`.
+    fn listener(path: &PathBuf, timeout: Duration) -> Result<Socket, std::io::Error> {
+        let _ = std::fs::remove_file(path);
+        let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+        socket.bind(&SockAddr::unix(path)?)?;
+        socket.listen(1)?;
+        socket.set_read_timeout(Some(timeout))?;
+        Ok(socket)
+    }
+
+    /// Answers a request in upper case and refuses an empty one.
+    fn shout(request: &str, _cid: u32) -> Result<String, String> {
+        if request.is_empty() {
+            return Err("empty request".to_owned());
+        }
+        Ok(request.to_uppercase())
+    }
+
+    /// Positive: no connection within the accept timeout ends the service
+    /// with nothing served, not with an error.
+    #[test]
+    fn an_accept_timeout_ends_the_service() -> Fallible {
+        let path = socket_path("idle");
+        let socket = listener(&path, Duration::from_millis(50))?;
+        let mut log = Vec::new();
+        let served = accept_loop(&socket, SERVICE, &mut log, &mut shout);
+        std::fs::remove_file(&path)?;
+        assert!(matches!(served, Ok(0)), "{served:?}");
+        Ok(())
+    }
+
+    /// Negative: an accept that fails for a reason other than its timeout
+    /// (a socket that never listened) is an I/O error.
+    #[test]
+    fn a_failing_accept_is_an_io_error() -> Fallible {
+        let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+        let mut log = Vec::new();
+        let served = accept_loop(&socket, SERVICE, &mut log, &mut shout);
+        assert!(
+            matches!(
+                served,
+                Err(MicroVmError::Io {
+                    what: "accepting on the AF_VSOCK port",
+                    ..
+                })
+            ),
+            "{served:?}"
+        );
+        Ok(())
+    }
+
+    /// Negative: a connection that cannot be answered is logged and counted,
+    /// and does not end the service.
+    #[test]
+    fn a_failed_connection_is_logged_and_counted() -> Fallible {
+        let path = socket_path("non-vsock");
+        let socket = listener(&path, Duration::from_millis(500))?;
+        let mut client = UnixStream::connect(&path)?;
+        client.set_write_timeout(Some(Duration::from_secs(1)))?;
+        client.write_all(b"ping\n")?;
+        let mut log = Vec::new();
+        let served = accept_loop(&socket, SERVICE, &mut log, &mut shout);
+        std::fs::remove_file(&path)?;
+        assert!(matches!(served, Ok(1)), "{served:?}");
+        let logged = String::from_utf8(log)?;
+        assert!(
+            logged.contains("guest: ") && logged.contains("not AF_VSOCK"),
+            "{logged}"
+        );
+        Ok(())
+    }
 }
