@@ -1,0 +1,68 @@
+---
+version: 1
+repository:
+  owner: plurano
+  name: saeptum
+  visibility: private
+  description: "Bounded job sandbox library in Rust (microVM and Wasm capsules, Linux sandboxed runner) with a Go binding."
+  homepage: ""
+  topics: []
+profiles:
+  - framework
+facets:
+  - security:high
+  - api:public-contract
+  - agent:sandboxed
+# The engine has no library flavor yet (cordanaLLM/praetor#67); until it
+# does, the repository is audited as rust-systems, as plurano/amussis is.
+flavors:
+  - name: rust-systems
+# The editors and agent clients this repository is worked on with. Files of
+# any other editor or client are not generated and not tracked.
+editors:
+  - universal
+  - vscode
+  - antigravity
+agent_clients:
+  - claude
+  - codex
+  - gemini
+overrides:
+  branch_protection:
+    # Solo-repository policy (fleet rule): one maintainer and no review bot
+    # can approve. Restore independent when a second maintainer or a review
+    # bot can.
+    review_mode: single_maintainer
+register:
+  sources:
+    expected: 13
+    sha256:
+      sha256:5a3006d30f84ffb6255122d2ae162400f493ccdfbef1eebcecc9b14a35e2f5c7
+    inputs:
+      - path: .paperclip/harness.json
+        surface: prompts
+        kind: message
+        format: json
+        selector: operating_contract.*
+      - path: .paperclip/harness.json
+        surface: prompts
+        kind: message
+        format: json
+        selector: invariants.*
+exceptions:
+  - rule: HISS-11
+    path: .github/workflows/release.yml
+    reason: adoption found the release workflows short of the declared supply chain (SLSA Build Level 3 declared, Level 0 measured; enforce_cosign without a cosign signing step; require_sbom without an SBOM step); raise them as docs/guides/releasing.md in Praetor describes, then remove this entry
+    expires: "2027-01-14"
+  - rule: declared-linters
+    tool: gitleaks
+    reason: adoption scaffolds no CI job for gitleaks declared by facet "security:high"; run it in a workflow, or remove this entry
+    expires: "2027-01-14"
+  - rule: declared-linters
+    tool: semgrep
+    reason: adoption scaffolds no CI job for semgrep declared by profile "framework", facet "agent:sandboxed"; run it in a workflow, or remove this entry
+    expires: "2027-01-14"
+  - rule: declared-linters
+    tool: trivy
+    reason: adoption scaffolds no CI job for trivy declared by facet "security:high"; run it in a workflow, or remove this entry
+    expires: "2027-01-14"

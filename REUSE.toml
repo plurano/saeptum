@@ -9,3 +9,35 @@ path = ["LICENSE", ".gitignore"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
+
+# Written by `praetorctl adopt` and held in step by `praetorctl audit`.
+# "closest" keeps the terms a generated file states itself.
+[[annotations]]
+path = [
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".config/**",
+    ".devcontainer/**",
+    ".gemini/**",
+    ".github/**",
+    ".paperclip/**",
+    ".vscode/**",
+    "docs/**",
+    ".editorconfig",
+    ".gitattributes",
+    ".standards-baseline.json",
+    ".standards.lock",
+    ".standards.yaml",
+    "AGENTS.md",
+    "AGENTS.readonly.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "Makefile",
+    "SECURITY.md",
+    "clippy.toml",
+    "lefthook.yml",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
+SPDX-License-Identifier = "EUPL-1.2"
