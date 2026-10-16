@@ -41,3 +41,10 @@ path = [
 precedence = "closest"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
+
+# Renovate's configuration, added by the Renovate onboarding pull request.
+[[annotations]]
+path = ["renovate.json", ".github/renovate.json"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
+SPDX-License-Identifier = "EUPL-1.2"
