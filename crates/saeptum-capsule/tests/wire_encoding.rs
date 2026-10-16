@@ -93,6 +93,24 @@ fn refused_values_do_not_decode() {
     assert!(!decodes::<Label>("7"));
     assert!(!decodes::<CapsuleSlot>("\"7\""));
     assert!(!decodes::<CapsuleSlot>("-1"));
+
+    let id_err = serde_json::from_str::<CorrelationId>("\"\"")
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(
+        id_err.contains("a bounded correlation identifier"),
+        "got: {id_err}"
+    );
+
+    let slot_err = serde_json::from_str::<CapsuleSlot>("0")
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(
+        slot_err.contains("a capsule slot inside the declared bound"),
+        "got: {slot_err}"
+    );
 }
 
 /// Negative: an unknown capability name is refused, not dropped.
@@ -100,6 +118,15 @@ fn refused_values_do_not_decode() {
 fn an_unknown_capability_is_refused() {
     assert!(!decodes::<CapabilitySet>("[\"network\",\"root\"]"));
     assert!(!decodes::<CapabilitySet>("\"network\""));
+
+    let cap_err = serde_json::from_str::<CapabilitySet>("[\"unknown\"]")
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(
+        cap_err.contains("a bounded list of capability names"),
+        "got: {cap_err}"
+    );
 }
 
 // --- Boundary -------------------------------------------------------------

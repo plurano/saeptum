@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+#
+# cargo-mutants configuration. Each exclusion is a mutant no test can kill
+# because it does not change behaviour; the reason sits beside it. Each
+# entry is a category D exception (entered 2026-10-16, expires 2027-02-13):
+# re-check it, or remove it when the code it names changes.
+exclude_re = [
+    # CorrelationId and Label are built only through their parse functions
+    # (Deserialize calls them too), which refuse empty input, so len is
+    # never 0 and is_empty is always false.
+    'replace CorrelationId::is_empty -> bool with false',
+    'replace Label::is_empty -> bool with false',
+    # RingCore::new starts both counters at 0 and submit adds the same
+    # count to both, so submitted == completed always holds.
+    'replace RingCore::is_drained -> bool with true',
+    # elapsed > budget and elapsed >= budget differ only when the monotonic
+    # clock reads exactly the budget, to the nanosecond; no test can place
+    # a sample there.
+    'replace > with >= in read_line',
+    'replace > with >= in RunningVm::connect',
+    'replace > with >= in RunningVm::reap',
+    # With == the elapsed check never fires, and the loop ends after
+    # MAX_POLLS polls of POLL (10 s, at least BOOT_BUDGET and STOP_BUDGET)
+    # with the same deadline error. In reap that path needs a killed child
+    # that try_wait never reaps, which the kernel does not produce.
+    'replace > with == in RunningVm::connect',
+    'replace > with == in RunningVm::reap',
+    # Child::kill returns Ok(()) when the child has already exited (std
+    # documentation, Rust 1.99), and reap runs on a child that is not yet
+    # reaped, so kill(pid, SIGKILL) on our own child cannot fail: the Err
+    # arms in reap are unreachable.
+    'replace match guard error\.kind\(\) == ErrorKind::InvalidInput with (true|false) in RunningVm::reap',
+    'replace == with != in RunningVm::reap',
+]

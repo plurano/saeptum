@@ -68,6 +68,10 @@ fn the_capability_set_grants_what_it_was_built_with() {
         assert_eq!(Capability::from_tag(capability.tag()), Some(capability));
         assert!(capability.bit() != 0);
     }
+    let repeated = CapabilitySet::NONE
+        .with(Capability::Network)
+        .with(Capability::Network);
+    assert!(repeated.allows(Capability::Network));
 }
 
 // --- Negative -------------------------------------------------------------
@@ -162,6 +166,7 @@ fn the_slot_range_is_closed_at_both_ends() -> Fallible {
 /// Boundary: the memory limit range is closed at both ends.
 #[test]
 fn the_memory_limit_range_is_closed_at_both_ends() -> Fallible {
+    assert_eq!(saeptum_capsule::MIN_CAPSULE_MEMORY_BYTES, 64 * 1024);
     assert_eq!(
         CapsuleMemoryLimit::new(saeptum_capsule::MIN_CAPSULE_MEMORY_BYTES)?.get(),
         saeptum_capsule::MIN_CAPSULE_MEMORY_BYTES
@@ -174,5 +179,6 @@ fn the_memory_limit_range_is_closed_at_both_ends() -> Fallible {
         CapsuleMemoryLimit::new(saeptum_capsule::MIN_CAPSULE_MEMORY_BYTES.saturating_sub(1))
             .is_err()
     );
+    assert!(CapsuleMemoryLimit::new(64 * 1024 - 1).is_err());
     Ok(())
 }
