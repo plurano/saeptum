@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Family preset from plurano/horistes (Horistes is Greek for the boundary commissioner who fixes limits, pronounced ho-RIS-tees): default.json for every repository of the family. settings-sync.json is not extended: no gate holds rust-toolchain.toml to a settings source here."
+  ],
+  "extends": [
+    "github>plurano/horistes"
+  ],
+  "packageRules": [
+    {
+      "description": "praetor-managed files: praetorctl adopt ships their updates and praetorctl audit locks them byte for byte",
+      "matchFileNames": [
+        ".devcontainer/devcontainer.json",
+        ".devcontainer/Dockerfile.praetor",
+        ".github/workflows/reuse.yml"
+      ],
+      "enabled": false
+    }
+  ]
+}
