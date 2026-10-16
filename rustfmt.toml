@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+#
+# Rust formatting, the same settings as plurano/amussis. The edition matches
+# the workspace edition the first crate will declare (2024); the CI gate runs
+# `cargo fmt --check`, so every setting here is a rule for every contributor.
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
