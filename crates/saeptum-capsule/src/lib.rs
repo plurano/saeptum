@@ -93,6 +93,7 @@
 //! ```
 
 pub mod capsule;
+pub mod encoding;
 pub mod error;
 pub mod id;
 pub mod microvm;
@@ -104,6 +105,7 @@ pub use crate::capsule::{
     Capability, CapabilitySet, CapsuleMemoryLimit, CapsuleRegistry, CapsuleSlot,
     MAX_CAPSULE_MEMORY_BYTES, MAX_WASM_CAPSULES, MIN_CAPSULE_MEMORY_BYTES, WasmCapsule,
 };
+pub use crate::encoding::MAX_CAPABILITY_ENTRIES;
 pub use crate::error::SandboxError;
 pub use crate::id::{CorrelationId, IdError, Label, MAX_CORRELATION_LEN, MAX_LABEL_LEN};
 pub use crate::microvm::{
