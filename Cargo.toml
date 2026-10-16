@@ -7,6 +7,7 @@
 resolver = "3"
 members = [
     "crates/saeptum-capsule",
+    "crates/saeptum-microvm",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ authors = ["Lusoris <lusoris@pm.me>"]
 [workspace.dependencies]
 serde = { version = "1.0.229", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+socket2 = { version = "0.6.5", default-features = false, features = ["all"] }
 thiserror = { version = "2.0.20", default-features = false, features = ["std"] }
 
 # The lint tables are the ones of the Aegis OS workspace the code moved from.

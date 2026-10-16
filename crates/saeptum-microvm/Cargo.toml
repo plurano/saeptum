@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@proton.me>
+# SPDX-License-Identifier: EUPL-1.2
+
+[package]
+name = "saeptum-microvm"
+description = "Firecracker microVMs on KVM for rows saeptum-capsule admitted: a per-VM configuration file booted with --no-api, one line-framed exchange over Firecracker's hybrid vsock, a bounded guest service on AF_VSOCK, and every process and socket torn down. No network device, no jailer, no API socket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+saeptum-capsule = { path = "../saeptum-capsule" }
+serde_json.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
