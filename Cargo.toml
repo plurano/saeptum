@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@proton.me>
+# SPDX-License-Identifier: EUPL-1.2
+
+# The member list is written out, never globbed: a directory under crates/
+# joins the workspace by a reviewed line here, not by gaining a manifest.
+[workspace]
+resolver = "3"
+members = [
+    "crates/saeptum-capsule",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "EUPL-1.2"
+repository = "https://github.com/plurano/saeptum"
+authors = ["Lusoris <lusoris@pm.me>"]
+
+# Versions match the Aegis OS workspace the code moved from.
+[workspace.dependencies]
+serde = { version = "1.0.229", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
+thiserror = { version = "2.0.20", default-features = false, features = ["std"] }
+
+# The lint tables are the ones of the Aegis OS workspace the code moved from.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+arithmetic_side_effects = "deny"
+cognitive_complexity = "deny"
+dbg_macro = "deny"
+exit = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+todo = "deny"
+too_many_lines = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unwrap_in_result = "deny"
+unwrap_used = "deny"
