@@ -3,10 +3,12 @@
 
 //! Executable checks on this crate's manifest.
 //!
-//! `saeptum-microvm` is a locked workspace member, takes `socket2` once from
-//! the workspace table, depends on `saeptum-capsule` by path, and takes **no
-//! async runtime, no monitor binding, no build script and no dependency on
-//! the operating system it moved from**. Each is asserted here.
+//! `saeptum-microvm` is a locked workspace member, takes `socket2` and `libc`
+//! once from the workspace table, depends on `saeptum-capsule` by path, and
+//! takes **no async runtime, no monitor binding, no build script and no
+//! dependency on the operating system it moved from**. Each is asserted here.
+//! `libc` serves the boot timer's one `unsafe` block alone; the crate's lint
+//! tables are held by `tests/unsafe_exception.rs`.
 
 use std::path::{Path, PathBuf};
 
@@ -40,7 +42,7 @@ fn the_crate_is_a_locked_member() {
 fn the_dependencies_are_the_workspace_ones() {
     let manifest = read(MANIFEST);
     assert!(!manifest.is_empty(), "the crate manifest must exist");
-    for expected in ["serde_json", "socket2", "thiserror"] {
+    for expected in ["libc", "serde_json", "socket2", "thiserror"] {
         assert!(manifest.contains(&format!("{expected}.workspace = true")));
     }
     assert!(manifest.contains("saeptum-capsule = { path = \"../saeptum-capsule\" }"));
@@ -58,7 +60,7 @@ fn the_crate_declares_no_runtime_or_binding() {
         "async-std",
         "kvm-ioctls",
         "firecracker-",
-        "libc",
+        "libc = {",
         "bindgen",
         "\ncc",
         "aegis-",
@@ -89,11 +91,16 @@ fn socket2_is_pinned_once_and_locked() {
     assert!(!read(MANIFEST).contains("socket2 = {"));
 }
 
-/// Boundary: the crate inherits the workspace lints rather than restating them.
+/// Boundary: `libc` is pinned once, at the workspace root, at the version
+/// `socket2` already locks.
 #[test]
-fn the_crate_inherits_the_workspace_lints() {
-    let manifest = read(MANIFEST);
-    assert!(manifest.contains("[lints]"));
-    assert!(!manifest.contains("[lints.rust]"));
-    assert!(!manifest.contains("[lints.clippy]"));
+fn libc_is_pinned_once_and_locked() {
+    let root = read("Cargo.toml");
+    let pins = root
+        .lines()
+        .filter(|line| line.starts_with("libc = "))
+        .count();
+    assert_eq!(pins, 1, "libc is pinned exactly once");
+    assert!(root.contains("libc = { version = \"0.2.190\""));
+    assert!(read("Cargo.lock").contains("name = \"libc\"\nversion = \"0.2.190\""));
 }

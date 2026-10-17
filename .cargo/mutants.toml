@@ -32,4 +32,11 @@ exclude_re = [
     # arms in reap are unreachable.
     'replace match guard error\.kind\(\) == ErrorKind::InvalidInput with (true|false) in RunningVm::reap',
     'replace == with != in RunningVm::reap',
+    # signal_boot_complete maps /dev/mem at Firecracker's boot timer
+    # address, which only a guest may do: a test on the host would write to
+    # the host's own physical memory when run as root. Its body is
+    # write_marker, which the boot tests mutate; the Ok(()) mutant is
+    # killed by the Guest-boot-time line Aegis OS checks per VM. Category D,
+    # entered 2026-10-17, expires 2027-02-14.
+    'replace signal_boot_complete -> Result<\(\), MicroVmError> with Ok\(\(\)\)',
 ]
