@@ -42,7 +42,7 @@ jobs:
 
       - name: Checkout source
         if: github.event.pull_request.draft != true
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Hand edit until the engine's rust-systems template carries this guard
       # (praetor order engine-flavor-ci-no-manifest-guard-1723): with no root
