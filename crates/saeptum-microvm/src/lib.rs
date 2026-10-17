@@ -25,6 +25,9 @@
 //!   per-VM configuration file ([`config`]) with `--no-api`, no drive, no
 //!   network interface and one vsock device whose guest context identifier is
 //!   the one the controller derived.
+//!   [`RunningVm::start_with`] takes [`LaunchOptions`], whose only switch,
+//!   `--boot-timer`, is off unless the caller turns it on; [`RunningVm::pid`]
+//!   names the process.
 //! * [`RunningVm::exchange`] sends one line to a guest port and returns one
 //!   line, bounded in bytes and in time; [`RunningVm::stop`] (or dropping the
 //!   value) kills, reaps and removes the sockets.
@@ -60,6 +63,6 @@ pub use crate::line::{
     MAX_ACK_BYTES, Unframed, connect_command, deadline_error, parse_ack, read_line, timed_out,
 };
 pub use crate::vm::{
-    BOOT_BUDGET, EXCHANGE_BUDGET, HANDSHAKE_BUDGET, Launch, MAX_DIRECTORY_ENTRIES, MAX_POLLS, POLL,
-    RunningVm, SOCKET_NAME, STOP_BUDGET, Stopped,
+    BOOT_BUDGET, EXCHANGE_BUDGET, HANDSHAKE_BUDGET, Launch, LaunchOptions, MAX_DIRECTORY_ENTRIES,
+    MAX_POLLS, POLL, RunningVm, SOCKET_NAME, STOP_BUDGET, Stopped,
 };

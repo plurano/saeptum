@@ -66,6 +66,24 @@ pub struct Launch<'a> {
     pub run_dir: &'a Path,
 }
 
+/// Opt-in switches for one microVM's process; every switch is off by default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LaunchOptions {
+    /// Starts Firecracker with `--boot-timer`. Firecracker 1.17.0 then logs
+    /// `Guest-boot-time = ...` to its stdout, the microVM's `console.log`,
+    /// once the guest writes the boot-complete byte to the boot timer device.
+    pub boot_timer: bool,
+}
+
+impl LaunchOptions {
+    /// Returns these options with the boot timer switched to `on`.
+    #[must_use]
+    pub const fn with_boot_timer(self, on: bool) -> Self {
+        Self { boot_timer: on }
+    }
+}
+
 /// How a microVM's process ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Stopped {
@@ -90,7 +108,17 @@ pub struct RunningVm {
 }
 
 impl RunningVm {
-    /// Starts the microVM for the controller's row `instance`.
+    /// Starts the microVM for the controller's row `instance` with every
+    /// [`LaunchOptions`] switch off.
+    ///
+    /// # Errors
+    ///
+    /// As [`RunningVm::start_with`].
+    pub fn start(launch: &Launch<'_>, instance: &MicroVmInstance) -> Result<Self, MicroVmError> {
+        Self::start_with(launch, instance, LaunchOptions::default())
+    }
+
+    /// Starts the microVM for the controller's row `instance` with `options`.
     ///
     /// # Errors
     ///
@@ -98,7 +126,11 @@ impl RunningVm {
     /// the console cannot be written or the process cannot be started, and
     /// [`MicroVmError::Refused`] for a path the configuration refuses; a
     /// refused socket path is caught before the directory is created.
-    pub fn start(launch: &Launch<'_>, instance: &MicroVmInstance) -> Result<Self, MicroVmError> {
+    pub fn start_with(
+        launch: &Launch<'_>,
+        instance: &MicroVmInstance,
+        options: LaunchOptions,
+    ) -> Result<Self, MicroVmError> {
         let vm_id = instance.vm_id;
         let dir = launch.run_dir.join(format!("vm-{}", vm_id.get()));
         let socket = dir.join(SOCKET_NAME);
@@ -115,7 +147,7 @@ impl RunningVm {
         let config_path = dir.join("vm.json");
         fs::write(&config_path, config)
             .map_err(|error| MicroVmError::io("writing a microVM configuration", error))?;
-        let child = spawn(launch.firecracker, &config_path, &dir, vm_id)?;
+        let child = spawn(launch.firecracker, &config_path, &dir, vm_id, options)?;
         Ok(Self {
             vm_id,
             cid: instance.vsock_cid,
@@ -137,6 +169,12 @@ impl RunningVm {
     #[must_use]
     pub const fn cid(&self) -> VsockCid {
         self.cid
+    }
+
+    /// Returns the operating-system process id of the Firecracker process.
+    #[must_use]
+    pub fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     /// Returns the microVM's directory.
@@ -320,24 +358,31 @@ impl Drop for RunningVm {
     }
 }
 
-/// Starts Firecracker with the configuration file and nothing else.
+/// Starts Firecracker with the configuration file and the switches `options`
+/// turns on, nothing else.
 fn spawn(
     firecracker: &Path,
     config: &Path,
     dir: &Path,
     vm_id: VmId,
+    options: LaunchOptions,
 ) -> Result<Child, MicroVmError> {
     let console = File::create(dir.join("console.log"))
         .map_err(|error| MicroVmError::io("creating a console log", error))?;
     let errors = console
         .try_clone()
         .map_err(|error| MicroVmError::io("sharing a console log", error))?;
-    Command::new(firecracker)
+    let mut command = Command::new(firecracker);
+    command
         .arg("--no-api")
         .arg("--config-file")
         .arg(config)
         .arg("--id")
-        .arg(format!("saeptum-vm-{}", vm_id.get()))
+        .arg(format!("saeptum-vm-{}", vm_id.get()));
+    if options.boot_timer {
+        command.arg("--boot-timer");
+    }
+    command
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(console)
