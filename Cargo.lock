@@ -51,6 +51,7 @@ dependencies = [
 name = "saeptum-microvm"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "saeptum-capsule",
  "serde_json",
  "socket2",

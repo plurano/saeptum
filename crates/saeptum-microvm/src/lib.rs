@@ -32,7 +32,10 @@
 //!   line, bounded in bytes and in time; [`RunningVm::stop`] (or dropping the
 //!   value) kills, reaps and removes the sockets.
 //! * [`serve`] is the guest's bounded service on `AF_VSOCK`; [`answer`] frames
-//!   one request and one answer for any [`Responder`].
+//!   one request and one answer for any [`Responder`];
+//!   [`signal_boot_complete`] writes the byte Firecracker's boot timer reads
+//!   as boot complete, so a VM started with `--boot-timer` logs its guest
+//!   boot time.
 //! * [`mod@line`] frames both directions and Firecracker's hybrid-vsock
 //!   handshake: the host end is `AF_UNIX`, the guest end `AF_VSOCK`, and
 //!   Firecracker's own device model carries the bytes between them (its
@@ -41,8 +44,8 @@
 //! # What this crate does not claim
 //!
 //! It fetches no Firecracker binary, kernel or initramfs: the caller names
-//! them in [`Launch`]. It measures no boot time and no memory footprint, uses
-//! no jailer, and runs every microVM as the invoking user. A pass of its tests
+//! them in [`Launch`]. It reads no boot time itself (Firecracker logs it) and
+//! measures no memory footprint, uses no jailer, and runs every microVM as the invoking user. A pass of its tests
 //! is development evidence and closes no hardware, isolation or release gate.
 
 pub mod config;
@@ -56,8 +59,9 @@ pub use crate::config::{
 };
 pub use crate::error::MicroVmError;
 pub use crate::guest::{
-    ACCEPT_BUDGET, BACKLOG, GUEST_EXCHANGE_BUDGET, MAX_GUEST_CONNECTIONS, Responder, Service,
-    VMADDR_CID_ANY, answer, serve,
+    ACCEPT_BUDGET, BACKLOG, BOOT_COMPLETE_MAGIC, BOOT_TIMER_ADDRESS, DEV_MEM,
+    GUEST_EXCHANGE_BUDGET, MAX_GUEST_CONNECTIONS, Responder, Service, VMADDR_CID_ANY, answer,
+    serve, signal_boot_complete,
 };
 pub use crate::line::{
     MAX_ACK_BYTES, Unframed, connect_command, deadline_error, parse_ack, read_line, timed_out,

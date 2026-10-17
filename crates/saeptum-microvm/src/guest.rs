@@ -15,6 +15,9 @@
 //! [`answer`] frames it, and a responder's refusal is answered with one
 //! `ERROR <reason>` line rather than silence, so the host reports the
 //! guest's reason ([`crate::vm::RunningVm::exchange`]).
+//!
+//! [`signal_boot_complete`] tells Firecracker's boot timer that the guest
+//! has booted, so the host log carries its boot time.
 
 use std::fmt::Display;
 use std::io::{Read, Write};
@@ -24,6 +27,10 @@ use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::error::MicroVmError;
 use crate::line::{Unframed, read_line, timed_out};
+
+mod boot;
+
+pub use boot::{BOOT_COMPLETE_MAGIC, BOOT_TIMER_ADDRESS, DEV_MEM, signal_boot_complete};
 
 /// Scalar upper bound on the connections one guest answers.
 pub const MAX_GUEST_CONNECTIONS: u32 = 16;

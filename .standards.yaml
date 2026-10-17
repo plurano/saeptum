@@ -66,3 +66,9 @@ exceptions:
     tool: trivy
     reason: adoption scaffolds no CI job for trivy declared by facet "security:high"; run it in a workflow, or remove this entry
     expires: "2027-01-14"
+  - rule: mutants
+    path: .cargo/mutants.toml
+    category: D
+    entered: "2026-10-16"
+    reason: cargo-mutants exclusions of mutants no test can kill (equivalent mutants, unreachable arms, a guest-only call); each states its reason beside it; re-check them, or remove each when the code it names changes
+    expires: "2027-02-13"
