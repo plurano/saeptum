@@ -6,8 +6,8 @@
 //! This is the scaffold's `MicroVmController` with the three things it lacked:
 //! the capacity refusal is a typed error rather than a `&'static str`, the
 //! guest memory size and the `vsock` context identifier are validated instead
-//! of copied, and the boot-time literal is [`Unmeasured`] so it cannot be read
-//! back as an observation.
+//! of copied, and the boot time a row carries is a [`Measured`] figure that
+//! names its monitor, or none at all.
 //!
 //! **Nothing here boots anything.** No process is started, no `/dev/kvm` is
 //! opened, no jailer is configured, no API socket is created and no guest
@@ -17,6 +17,7 @@
 
 use crate::error::SandboxError;
 use crate::id::Label;
+use crate::measured::Measured;
 use crate::unmeasured::Unmeasured;
 use crate::vmm::VmmIdentity;
 
@@ -40,23 +41,36 @@ pub const MAX_GUEST_MEMORY_MIB: u32 = 1024;
 
 /// The boot time the scaffold writes into every sandbox it creates.
 ///
-/// Recorded from export-037 `ce490c88081f`, where the field is assigned the
-/// literal 112 with the comment "Sub-125ms cold boot speed". REQ-P10-05 states
-/// what it is worth: the value is unmeasured. M21 boots microVMs to prove the
-/// sandbox path and times none of them; the measurement is M22's (D71).
-pub const SCAFFOLD_BOOT_TIME_MS: Unmeasured<u32> = Unmeasured::new(112);
+/// Replaces the scaffold's literal 112 (export-037 `ce490c88081f`, "Sub-125ms
+/// cold boot speed"), which REQ-P10-05 recorded as unmeasured. Aegis OS run
+/// r20261017T124857-0027 of `make verify-workstation` booted 64 Firecracker 1.17.0
+/// microVMs with the boot timer on; this is the median of their
+/// `Guest-boot-time` wall clock, 306210 us, in whole milliseconds. The timer
+/// starts when Firecracker begins building the microVM.
+pub const MEASURED_BOOT_TIME_MS: Measured<u32> =
+    Measured::new(306, VmmIdentity::Firecracker, "r20261017T124857-0027");
+
+/// The measured footprint of one Firecracker monitor process, in kibibytes.
+///
+/// The median `VmRSS` of the same run's 64 Firecracker 1.17.0 processes after
+/// each microVM's first answer. It is the monitor's resident set: its own
+/// memory plus the part of the 64 MiB guest it has touched, not the guest's
+/// view of its memory.
+pub const MEASURED_FOOTPRINT_KIB: Measured<u32> =
+    Measured::new(61_620, VmmIdentity::Firecracker, "r20261017T124857-0027");
 
 /// The cold-boot target the P10 report states, in milliseconds.
 ///
 /// Recorded from export-018 `5dbc6d071bbb` (REQ-P10-01). A target is not a
-/// measurement, and no measurement exists: M22 is where a real boot under a
-/// named monitor would produce one.
+/// measurement and stays [`Unmeasured`]; [`MEASURED_BOOT_TIME_MS`] is the
+/// figure held against it, and misses it.
 pub const BOOT_TIME_TARGET_MS: Unmeasured<u32> = Unmeasured::new(125);
 
 /// The resident footprint target the P10 report states, in mebibytes.
 ///
 /// Recorded from export-018 `5dbc6d071bbb` (REQ-P10-01), on the same terms as
-/// [`BOOT_TIME_TARGET_MS`].
+/// [`BOOT_TIME_TARGET_MS`]; [`MEASURED_FOOTPRINT_KIB`] is held against it, and
+/// misses it.
 pub const FOOTPRINT_TARGET_MIB: Unmeasured<u32> = Unmeasured::new(5);
 
 /// A sandbox identifier.
@@ -225,8 +239,9 @@ pub struct MicroVmInstance {
     pub vmm: VmmIdentity,
     /// The lifecycle state.
     pub state: VmState,
-    /// The scaffold's boot-time literal, carried as what it is.
-    pub declared_boot_time_ms: Unmeasured<u32>,
+    /// The measured boot time of the row's monitor, or `None` when no
+    /// figure was measured on it (D58: never another monitor's figure).
+    pub measured_boot_time_ms: Option<Measured<u32>>,
 }
 
 /// The bounded sandbox table.
@@ -278,7 +293,7 @@ impl MicroVmController {
             accelerator: request.accelerator,
             vmm: request.vmm,
             state: VmState::Running,
-            declared_boot_time_ms: SCAFFOLD_BOOT_TIME_MS,
+            measured_boot_time_ms: MEASURED_BOOT_TIME_MS.for_vmm(request.vmm),
         };
         let slot = self
             .instances

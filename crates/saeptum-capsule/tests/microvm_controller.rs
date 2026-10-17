@@ -12,8 +12,9 @@
 mod common;
 
 use saeptum_capsule::{
-    FIRST_GUEST_CID, FIRST_VM_ID, GuestMemoryMib, MAX_MICROVMS, MicroVmController, MicroVmInstance,
-    MicroVmRequest, SCAFFOLD_BOOT_TIME_MS, SandboxError, VmId, VmState, VmmIdentity, VsockCid,
+    FIRST_GUEST_CID, FIRST_VM_ID, GuestMemoryMib, MAX_MICROVMS, MEASURED_BOOT_TIME_MS,
+    MicroVmController, MicroVmInstance, MicroVmRequest, SandboxError, VmId, VmState, VmmIdentity,
+    VsockCid,
 };
 
 use common::{Fallible, GUEST_MIB, SANDBOX, filled_controller, label, sandbox_request};
@@ -48,7 +49,7 @@ fn a_spawned_sandbox_carries_its_request() -> Fallible {
 }
 
 /// Positive: a spawned sandbox is running, unaccelerated, and carries the
-/// derived context identifier and the recorded boot-time literal.
+/// derived context identifier and its monitor's measured boot time.
 #[test]
 fn a_spawned_sandbox_carries_its_derived_fields() -> Fallible {
     let mut controller = MicroVmController::new();
@@ -62,7 +63,7 @@ fn a_spawned_sandbox_carries_its_derived_fields() -> Fallible {
         row.vsock_cid,
         VsockCid::new(FIRST_GUEST_CID.saturating_add(FIRST_VM_ID))?
     );
-    assert_eq!(row.declared_boot_time_ms, SCAFFOLD_BOOT_TIME_MS);
+    assert_eq!(row.measured_boot_time_ms, Some(MEASURED_BOOT_TIME_MS));
     Ok(())
 }
 

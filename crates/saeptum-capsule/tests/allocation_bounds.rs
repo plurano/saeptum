@@ -57,6 +57,7 @@ fn every_value_on_a_decision_path_owns_no_heap() {
     assert_no_heap::<VmmIdentity>();
     assert_no_heap::<SandboxError>();
     assert_no_heap::<Unmeasured<u32>>();
+    assert_no_heap::<saeptum_capsule::Measured<u32>>();
 }
 
 /// Positive: driving both tables to their bounds changes no size.
