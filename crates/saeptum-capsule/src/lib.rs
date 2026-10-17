@@ -30,12 +30,14 @@
 //!   caller records can say which monitor produced it; [`VMM_PROBES`] records
 //!   what the two probes returned on the reference profile.
 //!
-//! # The boot-time literal is not a measurement
+//! # Measured figures and the targets they are held against
 //!
-//! [`SCAFFOLD_BOOT_TIME_MS`], [`BOOT_TIME_TARGET_MS`] and
-//! [`FOOTPRINT_TARGET_MIB`] are [`Unmeasured`] values: the sources state them
-//! and nothing has measured them. `tests/unmeasured_literals.rs` keeps them
-//! that way.
+//! [`MEASURED_BOOT_TIME_MS`] and [`MEASURED_FOOTPRINT_KIB`] are [`Measured`]
+//! values: each names the monitor and the run that produced it, and a figure
+//! without a monitor does not compile. They replace the scaffold's boot-time
+//! literal of 112 ms. [`BOOT_TIME_TARGET_MS`] and [`FOOTPRINT_TARGET_MIB`]
+//! stay [`Unmeasured`]: they are the targets the sources state, not
+//! observations. `tests/measured_figures.rs` holds both apart.
 //!
 //! # Design invariants (see `AGENTS.md`)
 //!
@@ -96,6 +98,7 @@ pub mod capsule;
 pub mod encoding;
 pub mod error;
 pub mod id;
+pub mod measured;
 pub mod microvm;
 pub mod ring;
 pub mod unmeasured;
@@ -108,10 +111,12 @@ pub use crate::capsule::{
 pub use crate::encoding::MAX_CAPABILITY_ENTRIES;
 pub use crate::error::SandboxError;
 pub use crate::id::{CorrelationId, IdError, Label, MAX_CORRELATION_LEN, MAX_LABEL_LEN};
+pub use crate::measured::Measured;
 pub use crate::microvm::{
     BOOT_TIME_TARGET_MS, FIRST_GUEST_CID, FIRST_VM_ID, FOOTPRINT_TARGET_MIB, GuestMemoryMib,
-    MAX_GUEST_MEMORY_MIB, MAX_MICROVMS, MIN_GUEST_MEMORY_MIB, MicroVmController, MicroVmInstance,
-    MicroVmRequest, SCAFFOLD_BOOT_TIME_MS, VmId, VmState, VsockCid,
+    MAX_GUEST_MEMORY_MIB, MAX_MICROVMS, MEASURED_BOOT_TIME_MS, MEASURED_FOOTPRINT_KIB,
+    MIN_GUEST_MEMORY_MIB, MicroVmController, MicroVmInstance, MicroVmRequest, VmId, VmState,
+    VsockCid,
 };
 pub use crate::ring::{IOURING_QUEUE_DEPTH, RingCore};
 pub use crate::unmeasured::Unmeasured;

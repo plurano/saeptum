@@ -7,21 +7,21 @@
 //! creates, with the comment "Sub-125ms cold boot speed", and the crate header
 //! lists "under 125ms boot and under 5MB RAM" among its standards targets.
 //! REQ-P10-05 records what those figures are: **the values are unmeasured**.
-//! M21 boots microVMs (`crates/aegis-vesta-sandbox`, `make
-//! verify-workstation`) to prove the sandbox path and measures neither figure:
-//! under decision D71 the measurements are M22's, each naming its monitor.
-//! This crate starts no process at all.
+//! The scaffold's 112 is gone: Aegis OS measured the boot time and footprint
+//! under Firecracker (M22, decision D71), and those figures are
+//! [`Measured`](crate::Measured) values that name their monitor. The two
+//! targets stay what they were. This crate starts no process at all.
 //!
 //! A bare `u32` field cannot carry that. [`Unmeasured<T>`] is the wrapper that
-//! does: a value of this type is a recorded target or a scaffold literal and
-//! never an observation, its [`Display`](core::fmt::Display) renders the
+//! does: a value of this type is a recorded target and never an
+//! observation, its [`Display`](core::fmt::Display) renders the
 //! provenance next to the number, and reading the number is the explicit call
 //! [`Unmeasured::get`] rather than a field access.
 //!
 //! What it is not: a unit. It carries no dimension and does not know
 //! milliseconds from mebibytes, so the constant that holds one says which.
 //! What it also is not: proof that no measurement is recorded anywhere -- it is
-//! the type the two recorded P10 literals use, and `tests/unmeasured_literals.rs`
+//! the type the two recorded P10 targets use, and `tests/measured_figures.rs`
 //! checks the ones this crate declares.
 
 use core::fmt;

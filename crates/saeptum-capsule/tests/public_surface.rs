@@ -55,14 +55,15 @@ const MINIMUM_SURFACE: usize = 100;
 
 /// How many of the collected names only the M15 arm reads.
 ///
-/// Measured on 2026-10-16 (105 names in all, 91 without the arm) by running
-/// the same walk twice, once with the arm
-/// and once without. `the_field_arm_carries_the_floor` asserts the difference,
+/// Measured on 2026-10-17 (110 names in all, 97 without the arm) by running
+/// the same walk twice, once with the arm and once without. It was 14 on
+/// 2026-10-16; `Measured::vmm` now declares `vmm` as a method, so the keyword
+/// arm collects that name too and the field arm adds it no longer. `the_field_arm_carries_the_floor` asserts the difference,
 /// so the figure cannot drift out of agreement with the code the way a number
 /// stated only in prose can. Every one of them is a public struct field; this
 /// crate declares no `pub static` today, so that half of the arm is coverage
 /// for a shape this `src/` does not yet use.
-const FIELD_ARM_NAMES: usize = 14;
+const FIELD_ARM_NAMES: usize = 13;
 
 /// Which enclosing block makes an unmarked item public API.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -406,10 +407,10 @@ fn the_scanner_reads_public_surface_and_not_private_helpers() {
         "CapsuleRegistry",
         "CapsuleSlot",
         "MAX_MICROVMS",
-        "SCAFFOLD_BOOT_TIME_MS",
+        "MEASURED_BOOT_TIME_MS",
         "MicroVmTableFull",
         "VMM_PROBES",
-        "declared_boot_time_ms",
+        "measured_boot_time_ms",
         "probed_on",
         "permitted_memory_bytes",
     ] {
