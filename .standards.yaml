@@ -3,7 +3,7 @@ version: 1
 repository:
   owner: plurano
   name: saeptum
-  visibility: private
+  visibility: public
   description: "Bounded job sandbox library in Rust (microVM and Wasm capsules, Linux sandboxed runner) with a Go binding."
   homepage: ""
   topics: []

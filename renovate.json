@@ -12,7 +12,7 @@
       "matchFileNames": [
         ".devcontainer/devcontainer.json",
         ".devcontainer/Dockerfile.praetor",
-        ".github/workflows/reuse.yml"
+        ".config/reuse/requirements.txt"
       ],
       "enabled": false
     }
