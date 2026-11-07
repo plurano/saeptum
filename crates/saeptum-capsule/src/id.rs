@@ -52,7 +52,8 @@ const fn permitted(byte: u8) -> bool {
 }
 
 /// A validated correlation identifier of at most [`MAX_CORRELATION_LEN`] bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct CorrelationId {
     bytes: [u8; MAX_CORRELATION_LEN],
     len: u8,
@@ -114,8 +115,25 @@ impl fmt::Display for CorrelationId {
     }
 }
 
+impl From<CorrelationId> for String {
+    fn from(id: CorrelationId) -> Self {
+        core::str::from_utf8(id.as_bytes())
+            .unwrap_or_default()
+            .to_owned()
+    }
+}
+
+impl TryFrom<String> for CorrelationId {
+    type Error = &'static str;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        Self::parse(&raw).map_err(|_| "a bounded correlation identifier")
+    }
+}
+
 /// A validated sandbox or capsule label of at most [`MAX_LABEL_LEN`] bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Label {
     bytes: [u8; MAX_LABEL_LEN],
     len: u8,
@@ -174,5 +192,21 @@ impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = core::str::from_utf8(self.as_bytes()).map_err(|_| fmt::Error)?;
         f.write_str(text)
+    }
+}
+
+impl From<Label> for String {
+    fn from(label: Label) -> Self {
+        core::str::from_utf8(label.as_bytes())
+            .unwrap_or_default()
+            .to_owned()
+    }
+}
+
+impl TryFrom<String> for Label {
+    type Error = &'static str;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        Self::parse(&raw).map_err(|_| "a bounded sandbox or capsule label")
     }
 }

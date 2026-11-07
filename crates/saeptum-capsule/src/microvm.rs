@@ -94,8 +94,25 @@ impl VmId {
 }
 
 /// A validated guest memory size, in mebibytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct GuestMemoryMib(u32);
+
+impl From<GuestMemoryMib> for u64 {
+    fn from(guest: GuestMemoryMib) -> Self {
+        Self::from(guest.get())
+    }
+}
+
+impl TryFrom<u64> for GuestMemoryMib {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        let mib =
+            u32::try_from(value).map_err(|_| "a guest memory size inside the declared range")?;
+        Self::new(mib).map_err(|_| "a guest memory size inside the declared range")
+    }
+}
 
 impl GuestMemoryMib {
     /// Validates `mib` against `MIN_GUEST_MEMORY_MIB..=MAX_GUEST_MEMORY_MIB`.
@@ -123,8 +140,24 @@ impl GuestMemoryMib {
 }
 
 /// A validated guest `vsock` context identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct VsockCid(u32);
+
+impl From<VsockCid> for u64 {
+    fn from(cid: VsockCid) -> Self {
+        Self::from(cid.get())
+    }
+}
+
+impl TryFrom<u64> for VsockCid {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        let cid = u32::try_from(value).map_err(|_| "a guest vsock context identifier")?;
+        Self::new(cid).map_err(|_| "a guest vsock context identifier")
+    }
+}
 
 impl VsockCid {
     /// Validates `cid` against the reserved low identifiers.
