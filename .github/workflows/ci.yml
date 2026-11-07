@@ -22,6 +22,8 @@ env:
 jobs:
   test:
     runs-on: ubuntu-26.04
+    # Floor: hosted runner setup + checkout jitter on a sub-minute job.
+    timeout-minutes: 5
     # Every cargo step builds with rustc warnings as errors (HISS-10), the test
     # build included; praetorctl audit fails a cargo lane without it.
     env:
