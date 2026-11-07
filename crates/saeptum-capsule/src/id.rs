@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@proton.me>
 // SPDX-License-Identifier: EUPL-1.2
 
-//! The bounded identifiers, stored inline when they fit.
+//! The bounded, allocation-free identifiers.
 //!
 //! `docs/integration/stack.md` asks every crossing to carry a correlation
 //! identifier, and both P10 payloads also name the sandbox or capsule they are
-//! about. Each is validated on construction and stored via [`CompactString`],
-//! which keeps short values inline (up to 24 bytes on 64-bit targets) and
-//! spills to the heap only for longer ones. No identifier can be silently
-//! truncated or sanitised: a malformed input is refused.
+//! about. Each is validated on construction and stored inline via
+//! [`ArrayString`], so no decision path allocates for one and none can be
+//! silently truncated or sanitised: a malformed input is refused.
 //!
 //! The scaffold (export-037 `ce490c88081f`) carried names as `[u8; 32]`
 //! written from a padded string literal, which cannot refuse anything and
-//! cannot say how long the name actually is. [`Label`] adds the refusal.
+//! cannot say how long the name actually is. [`Label`] keeps the inline
+//! storage and adds the refusal.
 
-use compact_str::CompactString;
+use arrayvec::ArrayString;
 use core::fmt;
 
 /// Scalar upper bound, in bytes, on a correlation identifier.
@@ -71,10 +71,10 @@ fn validate(raw: &str, max: usize) -> Result<(), IdError> {
 }
 
 /// A validated correlation identifier of at most [`MAX_CORRELATION_LEN`] bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct CorrelationId {
-    inner: CompactString,
+    inner: ArrayString<MAX_CORRELATION_LEN>,
 }
 
 impl CorrelationId {
@@ -87,9 +87,14 @@ impl CorrelationId {
     /// character set. The input is never truncated or sanitised.
     pub fn parse(raw: &str) -> Result<Self, IdError> {
         validate(raw, MAX_CORRELATION_LEN)?;
-        Ok(Self {
-            inner: CompactString::new(raw),
-        })
+        let mut inner = ArrayString::new();
+        if inner.try_push_str(raw).is_err() {
+            return Err(IdError::TooLong {
+                max: MAX_CORRELATION_LEN,
+                actual: raw.len(),
+            });
+        }
+        Ok(Self { inner })
     }
 
     /// Returns the validated bytes.
@@ -113,13 +118,13 @@ impl CorrelationId {
 
 impl fmt::Display for CorrelationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.inner, f)
+        f.write_str(&self.inner)
     }
 }
 
 impl From<CorrelationId> for String {
     fn from(id: CorrelationId) -> Self {
-        id.inner.into_string()
+        id.inner.as_str().to_owned()
     }
 }
 
@@ -127,18 +132,15 @@ impl TryFrom<String> for CorrelationId {
     type Error = &'static str;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
-        validate(&raw, MAX_CORRELATION_LEN).map_err(|_| "a bounded correlation identifier")?;
-        Ok(Self {
-            inner: CompactString::from(raw),
-        })
+        Self::parse(&raw).map_err(|_| "a bounded correlation identifier")
     }
 }
 
 /// A validated sandbox or capsule label of at most [`MAX_LABEL_LEN`] bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Label {
-    inner: CompactString,
+    inner: ArrayString<MAX_LABEL_LEN>,
 }
 
 impl Label {
@@ -151,9 +153,14 @@ impl Label {
     /// never truncated or sanitised.
     pub fn parse(raw: &str) -> Result<Self, IdError> {
         validate(raw, MAX_LABEL_LEN)?;
-        Ok(Self {
-            inner: CompactString::new(raw),
-        })
+        let mut inner = ArrayString::new();
+        if inner.try_push_str(raw).is_err() {
+            return Err(IdError::TooLong {
+                max: MAX_LABEL_LEN,
+                actual: raw.len(),
+            });
+        }
+        Ok(Self { inner })
     }
 
     /// Returns the validated bytes.
@@ -177,13 +184,13 @@ impl Label {
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.inner, f)
+        f.write_str(&self.inner)
     }
 }
 
 impl From<Label> for String {
     fn from(label: Label) -> Self {
-        label.inner.into_string()
+        label.inner.as_str().to_owned()
     }
 }
 
@@ -191,9 +198,6 @@ impl TryFrom<String> for Label {
     type Error = &'static str;
 
     fn try_from(raw: String) -> Result<Self, Self::Error> {
-        validate(&raw, MAX_LABEL_LEN).map_err(|_| "a bounded sandbox or capsule label")?;
-        Ok(Self {
-            inner: CompactString::from(raw),
-        })
+        Self::parse(&raw).map_err(|_| "a bounded sandbox or capsule label")
     }
 }

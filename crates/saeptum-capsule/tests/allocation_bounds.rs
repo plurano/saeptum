@@ -1,17 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@proton.me>
 // SPDX-License-Identifier: EUPL-1.2
 
-//! HISS-03: the claim that the table storage is bounded, made falsifiable.
+//! HISS-03: the claim that no decision path allocates, made falsifiable.
 //!
-//! Numeric bounded types on the decision path are `Copy` and own no heap. The
-//! identifier types (`CorrelationId`, `Label`) delegate to `CompactString`,
-//! which stores short values inline and spills to the heap above 24 bytes;
-//! they are `Clone` but not `Copy`. The tables and structs that embed them
-//! are likewise `Clone` only.
-//!
-//! The structural property this file tests: every table is a fixed-size array,
-//! so admitting a sandbox or capsule changes no stack allocation. The stack
-//! layout is the same whether the table holds zero entries or the maximum.
+//! The reason this crate can say a decision path allocates nothing is
+//! structural: every value on such a path is `Copy`, so admitting a sandbox or
+//! a capsule writes into storage that already exists. `assert_no_heap::<T>()`
+//! is the executable form: a `Vec`, `String` or `Box` anywhere inside one of
+//! these types, at any depth, removes `Copy` and this file stops compiling,
+//! which fails the gate.
 //!
 //! # What is not claimed here
 //!
@@ -31,40 +28,39 @@ use saeptum_capsule::{
 
 use common::Fallible;
 
-fn assert_copy<T: Copy>() {}
-fn assert_clone<T: Clone>() {}
+/// Accepts only a type that owns no heap, because it is `Copy`.
+fn assert_no_heap<T: Copy>() {}
 
 // --- Positive -------------------------------------------------------------
 
-/// Positive: every numeric bounded type on a decision path owns no heap.
+/// Positive: every value on a decision path owns no heap.
+///
+/// This is the falsifier. Adding a `Vec`, `String` or `Box` to any of these
+/// types, or to anything they contain, removes `Copy` and this test stops
+/// compiling.
 #[test]
-fn numeric_types_own_no_heap() {
-    assert_copy::<GuestMemoryMib>();
-    assert_copy::<VsockCid>();
-    assert_copy::<VmId>();
-    assert_copy::<CapsuleSlot>();
-    assert_copy::<CapsuleMemoryLimit>();
-    assert_copy::<CapabilitySet>();
-    assert_copy::<RingCore>();
-    assert_copy::<VmmIdentity>();
-    assert_copy::<SandboxError>();
-    assert_copy::<Unmeasured<u32>>();
-    assert_copy::<saeptum_capsule::Measured<u32>>();
+fn every_value_on_a_decision_path_owns_no_heap() {
+    assert_no_heap::<MicroVmController>();
+    assert_no_heap::<MicroVmInstance>();
+    assert_no_heap::<MicroVmRequest>();
+    assert_no_heap::<GuestMemoryMib>();
+    assert_no_heap::<VsockCid>();
+    assert_no_heap::<VmId>();
+    assert_no_heap::<CapsuleRegistry>();
+    assert_no_heap::<WasmCapsule>();
+    assert_no_heap::<CapsuleSlot>();
+    assert_no_heap::<CapsuleMemoryLimit>();
+    assert_no_heap::<CapabilitySet>();
+    assert_no_heap::<CorrelationId>();
+    assert_no_heap::<Label>();
+    assert_no_heap::<RingCore>();
+    assert_no_heap::<VmmIdentity>();
+    assert_no_heap::<SandboxError>();
+    assert_no_heap::<Unmeasured<u32>>();
+    assert_no_heap::<saeptum_capsule::Measured<u32>>();
 }
 
-/// Positive: identifier-containing types are Clone.
-#[test]
-fn identifier_types_are_clone() {
-    assert_clone::<CorrelationId>();
-    assert_clone::<Label>();
-    assert_clone::<MicroVmRequest>();
-    assert_clone::<MicroVmInstance>();
-    assert_clone::<WasmCapsule>();
-    assert_clone::<MicroVmController>();
-    assert_clone::<CapsuleRegistry>();
-}
-
-/// Positive: driving both tables to their bounds changes no stack size.
+/// Positive: driving both tables to their bounds changes no size.
 #[test]
 fn driving_the_tables_changes_no_storage() -> Fallible {
     let controller = common::filled_controller(saeptum_capsule::MAX_MICROVMS)?;

@@ -216,7 +216,7 @@ impl VmState {
 ///
 /// A request is validated on construction, so the table stores decided values
 /// and never re-checks them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MicroVmRequest {
     /// The sandbox name.
     pub name: Label,
@@ -237,7 +237,7 @@ impl MicroVmRequest {
     /// set and `vmm` has no `PCI` passthrough. The scaffold sets its
     /// `is_gpu_enabled` flag on a Firecracker sandbox, which D58 records as
     /// the fact that forces the monitor question rather than deferring it.
-    pub fn new(
+    pub const fn new(
         name: Label,
         memory: GuestMemoryMib,
         accelerator: bool,
@@ -256,7 +256,7 @@ impl MicroVmRequest {
 }
 
 /// One sandbox row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MicroVmInstance {
     /// The sandbox identifier.
     pub vm_id: VmId,
@@ -279,9 +279,9 @@ pub struct MicroVmInstance {
 
 /// The bounded sandbox table.
 ///
-/// The whole table is a fixed array, so admitting a sandbox allocates nothing
-/// beyond what the labels themselves need.
-#[derive(Debug, Clone)]
+/// `Copy`, like every value on a decision path in this crate: the whole table
+/// is a fixed array, so admitting a sandbox allocates nothing.
+#[derive(Debug, Clone, Copy)]
 pub struct MicroVmController {
     instances: [Option<MicroVmInstance>; MAX_MICROVMS],
     count: usize,
@@ -296,9 +296,9 @@ impl Default for MicroVmController {
 impl MicroVmController {
     /// Builds an empty table.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            instances: core::array::from_fn(|_| None),
+            instances: [None; MAX_MICROVMS],
             count: 0,
         }
     }
@@ -363,7 +363,7 @@ impl MicroVmController {
             .take(MAX_MICROVMS)
             .flatten()
             .find(|instance| instance.vm_id == vm_id)
-            .cloned()
+            .copied()
     }
 
     /// Returns how many sandboxes the table holds.
