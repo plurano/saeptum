@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@proton.me>
+# SPDX-License-Identifier: EUPL-1.2
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+---
+reviews:
+  auto_review:
+    drafts: true
+    base_branches:
+      - .*
