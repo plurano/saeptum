@@ -88,8 +88,12 @@ impl Capability {
 }
 
 /// A capsule's granted capabilities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct CapabilitySet {
+    #[serde(with = "crate::encoding::capability_set_codec")]
     bits: u8,
 }
 
@@ -131,6 +135,18 @@ impl CapabilitySet {
     pub const fn is_empty(self) -> bool {
         self.bits == 0
     }
+
+    /// Reconstructs a set from its internal bitset.
+    #[must_use]
+    pub(crate) const fn from_bits(bits: u8) -> Self {
+        Self { bits }
+    }
+
+    /// Returns the internal bitset representation.
+    #[must_use]
+    pub(crate) const fn bits(self) -> u8 {
+        self.bits
+    }
 }
 
 /// A validated capsule slot, numbered from one.
@@ -138,8 +154,27 @@ impl CapabilitySet {
 /// The slot is the capsule's place in the table and part of the P09 request,
 /// so `1..=MAX_WASM_CAPSULES` is a bound on a payload field and not only on a
 /// loop: a request naming slot 129 is refused before anything is admitted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct CapsuleSlot(usize);
+
+impl From<CapsuleSlot> for u64 {
+    fn from(slot: CapsuleSlot) -> Self {
+        Self::try_from(slot.get()).unwrap_or(0)
+    }
+}
+
+impl TryFrom<u64> for CapsuleSlot {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        let slot =
+            usize::try_from(value).map_err(|_| "a capsule slot inside the declared bound")?;
+        Self::new(slot).map_err(|_| "a capsule slot inside the declared bound")
+    }
+}
 
 impl CapsuleSlot {
     /// The first admissible slot.
@@ -178,8 +213,23 @@ impl CapsuleSlot {
 }
 
 /// A validated capsule memory limit, in bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
 pub struct CapsuleMemoryLimit(u64);
+
+impl From<CapsuleMemoryLimit> for u64 {
+    fn from(limit: CapsuleMemoryLimit) -> Self {
+        limit.get()
+    }
+}
+
+impl TryFrom<u64> for CapsuleMemoryLimit {
+    type Error = &'static str;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Self::new(value).map_err(|_| "a capsule memory limit inside the declared range")
+    }
+}
 
 impl CapsuleMemoryLimit {
     /// Validates `bytes` against
