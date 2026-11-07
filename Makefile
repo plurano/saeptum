@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences
+verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -41,3 +41,10 @@ licences:
 		|| { printf 'FAIL: the planted licence was not refused: cargo-deny exited %s, not 4\n' \
 		"$$status" >&2; exit 1; }
 	@printf '%s\n' 'PASS: the planted licence is refused.'
+
+# Mutant-exclusion metadata: every exclude_re entry in .cargo/mutants.toml
+# carries category, entered and expires; the selftest verifies the planted
+# expired entry is caught.
+mutant-exclusions:
+	@python3 -B tools/check_mutant_exclusions.py --selftest
+	@python3 -B tools/check_mutant_exclusions.py
