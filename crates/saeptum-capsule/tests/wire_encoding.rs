@@ -25,6 +25,59 @@ fn decodes<T: serde::de::DeserializeOwned>(text: &str) -> bool {
     serde_json::from_str::<T>(text).is_ok()
 }
 
+// --- Golden bytes ---------------------------------------------------------
+
+/// Golden bytes: pin the exact JSON encoding of each of the seven bounded
+/// types, so a change to a serde attribute (dropping `transparent`, changing
+/// `try_from`, altering `into`) is caught by a byte comparison before CI sees
+/// the round-trip tests.
+#[test]
+fn golden_bytes_for_all_seven_types() -> Fallible {
+    let correlation = CorrelationId::parse(CORRELATION)?;
+    assert_eq!(
+        serde_json::to_string(&correlation)?,
+        "\"fixture-0001\"",
+        "CorrelationId"
+    );
+
+    let label = Label::parse(CAPSULE)?;
+    assert_eq!(
+        serde_json::to_string(&label)?,
+        "\"extism-capsule-01\"",
+        "Label"
+    );
+
+    let slot = CapsuleSlot::new(7)?;
+    assert_eq!(serde_json::to_string(&slot)?, "7", "CapsuleSlot");
+
+    let limit = CapsuleMemoryLimit::new(16_777_216)?;
+    assert_eq!(
+        serde_json::to_string(&limit)?,
+        "16777216",
+        "CapsuleMemoryLimit"
+    );
+
+    let guest = GuestMemoryMib::new(4)?;
+    assert_eq!(serde_json::to_string(&guest)?, "4", "GuestMemoryMib");
+
+    let cid = VsockCid::new(FIRST_GUEST_CID)?;
+    assert_eq!(
+        serde_json::to_string(&cid)?,
+        FIRST_GUEST_CID.to_string(),
+        "VsockCid"
+    );
+
+    let caps = CapabilitySet::new()
+        .with(Capability::FilesystemRead)
+        .with(Capability::ZenohIpc);
+    assert_eq!(
+        serde_json::to_string(&caps)?,
+        "[\"filesystem-read\",\"zenoh-ipc\"]",
+        "CapabilitySet"
+    );
+    Ok(())
+}
+
 // --- Positive -------------------------------------------------------------
 
 /// Positive: identifiers and labels travel as their own text.
