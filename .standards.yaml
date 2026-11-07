@@ -53,18 +53,26 @@ register:
 exceptions:
   - rule: HISS-11
     path: .github/workflows/release.yml
+    category: D
+    entered: "2026-10-16"
     reason: adoption found the release workflows short of the declared supply chain (SLSA Build Level 3 declared, Level 0 measured; enforce_cosign without a cosign signing step; require_sbom without an SBOM step); raise them as docs/guides/releasing.md in Praetor describes, then remove this entry
     expires: "2027-01-14"
   - rule: declared-linters
     tool: gitleaks
+    category: D
+    entered: "2026-10-16"
     reason: adoption scaffolds no CI job for gitleaks declared by facet "security:high"; run it in a workflow, or remove this entry
     expires: "2027-01-14"
   - rule: declared-linters
     tool: semgrep
+    category: D
+    entered: "2026-10-16"
     reason: adoption scaffolds no CI job for semgrep declared by profile "framework", facet "agent:sandboxed"; run it in a workflow, or remove this entry
     expires: "2027-01-14"
   - rule: declared-linters
     tool: trivy
+    category: D
+    entered: "2026-10-16"
     reason: adoption scaffolds no CI job for trivy declared by facet "security:high"; run it in a workflow, or remove this entry
     expires: "2027-01-14"
   - rule: mutants
