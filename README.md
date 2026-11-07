@@ -8,24 +8,26 @@ SPDX-License-Identifier: EUPL-1.2
      badge lines past 80 columns, so those five rules are off for this file.
      The prose below still wraps at 80. -->
 <div align="center">
-
   <img src="docs/assets/saeptum-readme-banner.svg" alt="Saeptum — bounded job sandbox library in Rust with Go bindings" height="120" />
+</div>
 
-  <!-- badge block: groups in the fleet README standard's fixed order -->
-  <!-- 2 CI/build -->
-  [![CI](https://github.com/plurano/saeptum/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/plurano/saeptum/actions/workflows/ci.yml)
-  <!-- 3 security/scorecard -->
-  [![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF-Scorecard-06b6d4?style=for-the-badge&labelColor=111a35)](https://scorecard.dev/viewer/?uri=github.com/plurano/saeptum)
-  <!-- 4 standards -->
-  [![HISS-21](https://img.shields.io/badge/Standards-HISS--21-06b6d4?style=for-the-badge&logo=nasa&labelColor=111a35)](AGENTS.md)
-  [![Power of 10](https://img.shields.io/badge/NASA_JPL-Power_of_10-3b82f6?style=for-the-badge&logo=nasa&labelColor=111a35)](CONTRIBUTING.md#modernized-nasa-jpl-power-of-10-rules)
-  [![Conventional Commits](https://img.shields.io/badge/Commits-Conventional-8b5cf6?style=for-the-badge&logo=conventionalcommits&logoColor=white&labelColor=111a35)](CONTRIBUTING.md)
-  <!-- 5 licence -->
-  [![License](https://img.shields.io/badge/License-EUPL--1.2-3b82f6?style=for-the-badge&labelColor=111a35)](LICENSES/EUPL-1.2.txt)
+<!-- badge block: groups in the fleet README standard's fixed order -->
+<!-- 2 CI/build -->
+[![CI](https://github.com/plurano/saeptum/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/plurano/saeptum/actions/workflows/ci.yml)
+<!-- 3 security/scorecard -->
+[![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF-Scorecard-06b6d4?style=for-the-badge&labelColor=111a35)](https://scorecard.dev/viewer/?uri=github.com/plurano/saeptum)
+<!-- 4 standards -->
+[![HISS-21](https://img.shields.io/badge/Standards-HISS--21-06b6d4?style=for-the-badge&logo=nasa&labelColor=111a35)](AGENTS.md)
+[![Power of 10](https://img.shields.io/badge/NASA_JPL-Power_of_10-3b82f6?style=for-the-badge&logo=nasa&labelColor=111a35)](CONTRIBUTING.md#modernized-nasa-jpl-power-of-10-rules)
+[![Conventional Commits](https://img.shields.io/badge/Commits-Conventional-8b5cf6?style=for-the-badge&logo=conventionalcommits&logoColor=white&labelColor=111a35)](CONTRIBUTING.md)
+<!-- 5 licence -->
+[![License](https://img.shields.io/badge/License-EUPL--1.2-3b82f6?style=for-the-badge&labelColor=111a35)](LICENSES/EUPL-1.2.txt)
 
-  **Bounded job sandbox library in Rust with Go bindings**
+<div align="center">
 
-  *Unified isolation across Firecracker microVMs, WebAssembly capsules, and bubblewrap*
+**Bounded job sandbox library in Rust with Go bindings**
+
+*Planned: unified isolation across Firecracker microVMs, WebAssembly capsules, and bubblewrap*
 
 </div>
 
