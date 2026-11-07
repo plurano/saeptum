@@ -70,134 +70,88 @@ fn validate(raw: &str, max: usize) -> Result<(), IdError> {
     Ok(())
 }
 
-/// A validated correlation identifier of at most [`MAX_CORRELATION_LEN`] bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct CorrelationId {
-    inner: ArrayString<MAX_CORRELATION_LEN>,
-}
-
-impl CorrelationId {
-    /// Parses `raw` into a correlation identifier.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IdError`] when `raw` is empty, longer than
-    /// [`MAX_CORRELATION_LEN`] bytes, or carries a byte outside the permitted
-    /// character set. The input is never truncated or sanitised.
-    pub fn parse(raw: &str) -> Result<Self, IdError> {
-        validate(raw, MAX_CORRELATION_LEN)?;
-        let mut inner = ArrayString::new();
-        if inner.try_push_str(raw).is_err() {
-            return Err(IdError::TooLong {
-                max: MAX_CORRELATION_LEN,
-                actual: raw.len(),
-            });
+macro_rules! bounded_id {
+    ($Type:ident, $cap:ident, $type_doc:literal, $parse_doc:literal, $err_msg:literal) => {
+        #[doc = $type_doc]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $Type {
+            inner: ArrayString<$cap>,
         }
-        Ok(Self { inner })
-    }
 
-    /// Returns the validated bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
+        impl $Type {
+            #[doc = $parse_doc]
+            ///
+            /// # Errors
+            ///
+            /// Returns [`IdError`] when `raw` is empty, longer than the bound,
+            /// or carries a byte outside the permitted character set. The input
+            /// is never truncated or sanitised.
+            pub fn parse(raw: &str) -> Result<Self, IdError> {
+                validate(raw, $cap)?;
+                let mut inner = ArrayString::new();
+                if inner.try_push_str(raw).is_err() {
+                    return Err(IdError::TooLong {
+                        max: $cap,
+                        actual: raw.len(),
+                    });
+                }
+                Ok(Self { inner })
+            }
 
-    /// Returns the length in bytes.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
+            /// Returns the validated bytes.
+            #[must_use]
+            pub fn as_bytes(&self) -> &[u8] {
+                self.inner.as_bytes()
+            }
 
-    /// Returns `false`; an identifier is never empty by construction.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-}
+            /// Returns the length in bytes.
+            #[must_use]
+            pub fn len(&self) -> usize {
+                self.inner.len()
+            }
 
-impl fmt::Display for CorrelationId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.inner)
-    }
-}
-
-impl From<CorrelationId> for String {
-    fn from(id: CorrelationId) -> Self {
-        id.inner.as_str().to_owned()
-    }
-}
-
-impl TryFrom<String> for CorrelationId {
-    type Error = &'static str;
-
-    fn try_from(raw: String) -> Result<Self, Self::Error> {
-        Self::parse(&raw).map_err(|_| "a bounded correlation identifier")
-    }
-}
-
-/// A validated sandbox or capsule label of at most [`MAX_LABEL_LEN`] bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Label {
-    inner: ArrayString<MAX_LABEL_LEN>,
-}
-
-impl Label {
-    /// Parses `raw` into a label.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IdError`] under the same rules as [`CorrelationId::parse`]:
-    /// empty, over-long, or outside the permitted character set. The input is
-    /// never truncated or sanitised.
-    pub fn parse(raw: &str) -> Result<Self, IdError> {
-        validate(raw, MAX_LABEL_LEN)?;
-        let mut inner = ArrayString::new();
-        if inner.try_push_str(raw).is_err() {
-            return Err(IdError::TooLong {
-                max: MAX_LABEL_LEN,
-                actual: raw.len(),
-            });
+            /// Returns `false`; an identifier is never empty by construction.
+            #[must_use]
+            pub fn is_empty(&self) -> bool {
+                self.inner.is_empty()
+            }
         }
-        Ok(Self { inner })
-    }
 
-    /// Returns the validated bytes.
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.inner.as_bytes()
-    }
+        impl fmt::Display for $Type {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.inner)
+            }
+        }
 
-    /// Returns the length in bytes.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
+        impl From<$Type> for String {
+            fn from(id: $Type) -> Self {
+                id.inner.as_str().to_owned()
+            }
+        }
 
-    /// Returns `false`; a label is never empty by construction.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
+        impl TryFrom<String> for $Type {
+            type Error = &'static str;
+
+            fn try_from(raw: String) -> Result<Self, Self::Error> {
+                Self::parse(&raw).map_err(|_| $err_msg)
+            }
+        }
+    };
 }
 
-impl fmt::Display for Label {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.inner)
-    }
-}
+bounded_id!(
+    CorrelationId,
+    MAX_CORRELATION_LEN,
+    "A validated correlation identifier of at most [`MAX_CORRELATION_LEN`] bytes.",
+    "Parses `raw` into a correlation identifier.",
+    "a bounded correlation identifier"
+);
 
-impl From<Label> for String {
-    fn from(label: Label) -> Self {
-        label.inner.as_str().to_owned()
-    }
-}
-
-impl TryFrom<String> for Label {
-    type Error = &'static str;
-
-    fn try_from(raw: String) -> Result<Self, Self::Error> {
-        Self::parse(&raw).map_err(|_| "a bounded sandbox or capsule label")
-    }
-}
+bounded_id!(
+    Label,
+    MAX_LABEL_LEN,
+    "A validated sandbox or capsule label of at most [`MAX_LABEL_LEN`] bytes.",
+    "Parses `raw` into a label.",
+    "a bounded sandbox or capsule label"
+);
