@@ -116,6 +116,33 @@ fn a_path_that_is_not_utf8_is_refused() -> Fallible {
     Ok(())
 }
 
+/// Negative: a socket path with embedded whitespace is refused.
+#[test]
+fn a_socket_path_with_whitespace_is_refused() {
+    let space = Path::new("/cache/runs/r1/vm 100/v.sock");
+    assert!(matches!(
+        check_socket_path(space),
+        Err(MicroVmError::Refused(_))
+    ));
+    let tab = Path::new("/cache/runs/r1/vm\t100/v.sock");
+    assert!(matches!(
+        check_socket_path(tab),
+        Err(MicroVmError::Refused(_))
+    ));
+}
+
+/// Negative: a socket path with a control character is refused.
+#[test]
+fn a_socket_path_with_a_control_character_is_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let nul_free_control = Path::new(OsStr::from_bytes(b"/cache/\x01v.sock"));
+    assert!(matches!(
+        check_socket_path(nul_free_control),
+        Err(MicroVmError::Refused(_))
+    ));
+}
+
 // --- Boundary -------------------------------------------------------------
 
 /// Boundary: 107 bytes of socket path is admitted, 108 is not.
