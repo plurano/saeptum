@@ -16,6 +16,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+compact_str = "0.9"
 serde.workspace = true
 thiserror.workspace = true
 

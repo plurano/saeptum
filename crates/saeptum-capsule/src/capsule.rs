@@ -257,7 +257,7 @@ impl CapsuleMemoryLimit {
 }
 
 /// One capsule row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WasmCapsule {
     /// The slot the capsule occupies.
     pub slot: CapsuleSlot,
@@ -270,7 +270,7 @@ pub struct WasmCapsule {
 }
 
 /// The bounded capsule table.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CapsuleRegistry {
     capsules: [Option<WasmCapsule>; MAX_WASM_CAPSULES],
     count: usize,
@@ -285,9 +285,9 @@ impl Default for CapsuleRegistry {
 impl CapsuleRegistry {
     /// Builds an empty table.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            capsules: [None; MAX_WASM_CAPSULES],
+            capsules: core::array::from_fn(|_| None),
             count: 0,
         }
     }
@@ -332,7 +332,7 @@ impl CapsuleRegistry {
     /// Returns the capsule in `slot`, when the table holds one.
     #[must_use]
     pub fn get(&self, slot: CapsuleSlot) -> Option<WasmCapsule> {
-        self.capsules.get(slot.index()).copied().flatten()
+        self.capsules.get(slot.index()).cloned().flatten()
     }
 
     /// Returns how many capsules the table holds.
