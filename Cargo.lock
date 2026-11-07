@@ -44,6 +44,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "test-support",
  "thiserror",
 ]
 
@@ -55,6 +56,7 @@ dependencies = [
  "saeptum-capsule",
  "serde_json",
  "socket2",
+ "test-support",
  "thiserror",
 ]
 
@@ -121,6 +123,10 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

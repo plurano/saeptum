@@ -10,20 +10,7 @@
 //! `libc` serves the boot timer's one `unsafe` block alone; the crate's lint
 //! tables are held by `tests/unsafe_exception.rs`.
 
-use std::path::{Path, PathBuf};
-
-/// Returns the workspace root, two directories above this crate's manifest.
-fn workspace_root() -> Option<PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    Some(manifest.parent()?.parent()?.to_path_buf())
-}
-
-/// Reads a workspace file, returning an empty string when it is missing.
-fn read(name: &str) -> String {
-    workspace_root()
-        .and_then(|root| std::fs::read_to_string(root.join(name)).ok())
-        .unwrap_or_default()
-}
+use test_support::read;
 
 /// The crate's own manifest.
 const MANIFEST: &str = "crates/saeptum-microvm/Cargo.toml";

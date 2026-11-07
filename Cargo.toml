@@ -8,6 +8,7 @@ resolver = "3"
 members = [
     "crates/saeptum-capsule",
     "crates/saeptum-microvm",
+    "crates/test-support",
 ]
 
 [workspace.package]
