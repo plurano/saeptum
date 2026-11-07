@@ -101,6 +101,6 @@ fn libc_is_pinned_once_and_locked() {
         .filter(|line| line.starts_with("libc = "))
         .count();
     assert_eq!(pins, 1, "libc is pinned exactly once");
-    assert!(root.contains("libc = { version = \"0.2.190\""));
-    assert!(read("Cargo.lock").contains("name = \"libc\"\nversion = \"0.2.190\""));
+    assert!(root.contains("libc = { version = \"0.2.191\""));
+    assert!(read("Cargo.lock").contains("name = \"libc\"\nversion = \"0.2.191\""));
 }
