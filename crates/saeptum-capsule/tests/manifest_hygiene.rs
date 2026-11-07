@@ -10,20 +10,7 @@
 //! the operating system it moved from**. Each is asserted here rather than
 //! left as prose.
 
-use std::path::{Path, PathBuf};
-
-/// Returns the workspace root, two directories above this crate's manifest.
-fn workspace_root() -> Option<PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    Some(manifest.parent()?.parent()?.to_path_buf())
-}
-
-/// Reads a workspace file, returning an empty string when it is missing.
-fn read(name: &str) -> String {
-    workspace_root()
-        .and_then(|root| std::fs::read_to_string(root.join(name)).ok())
-        .unwrap_or_default()
-}
+use test_support::{read, workspace_root};
 
 /// The member list is checked against this rather than against a literal
 /// count. A count has to be edited every time a milestone activates a crate,

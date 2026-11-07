@@ -16,7 +16,8 @@ use saeptum_capsule::{
 };
 
 /// What every test in this suite returns.
-pub type Fallible = Result<(), Box<dyn std::error::Error>>;
+#[allow(unused_imports)]
+pub use test_support::Fallible;
 
 /// The correlation identifier the fixtures thread through every payload.
 pub const CORRELATION: &str = "fixture-0001";
