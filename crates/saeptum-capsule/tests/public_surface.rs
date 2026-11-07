@@ -30,16 +30,14 @@
 //! This file excludes itself from the scanned test sources. A sweep that could
 //! read its own expectation list would pass by naming the names it checks.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
+
+use common::{LINE_BOUND, rust_sources};
 
 /// This file's name, excluded from the scanned test sources.
 const SWEEP_FILE: &str = "public_surface.rs";
-
-/// Scalar bound on directories visited and entries read per directory.
-const WALK_BOUND: usize = 64;
-
-/// Scalar bound on the lines read from any one source file.
-const LINE_BOUND: usize = 4096;
 
 /// The smallest public surface the scanner may report before it is assumed to
 /// be reading nothing rather than finding nothing.
@@ -273,42 +271,14 @@ impl Scanner {
     }
 }
 
-/// Returns the `.rs` files under `root`, as (file name, body) pairs.
-///
-/// The walk is iterative and doubly bounded: at most [`WALK_BOUND`]
-/// directories and at most [`WALK_BOUND`] entries per directory.
-fn rust_sources(root: &Path) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
-    for _ in 0..WALK_BOUND {
-        let Some(directory) = stack.pop() else { break };
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries.flatten().take(WALK_BOUND) {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|ext| ext != "rs") {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|raw| raw.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            out.push((name, std::fs::read_to_string(&path).unwrap_or_default()));
-        }
-    }
-    out
-}
-
 /// Returns the distinct names `reader` finds in the crate's `src/`.
 fn collected_names(reader: fn(&str) -> Option<String>) -> Vec<String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut scanner = Scanner::new(reader);
-    for (_, body) in rust_sources(&src) {
+    let Ok(sources) = rust_sources(&src) else {
+        return Vec::new();
+    };
+    for (_, body) in sources {
         scanner.file(&body);
     }
     scanner.names.sort_unstable();
@@ -333,7 +303,10 @@ fn keyword_only_names() -> Vec<String> {
 fn test_sources() -> String {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let mut out = String::new();
-    for (name, body) in rust_sources(&tests) {
+    let Ok(sources) = rust_sources(&tests) else {
+        return out;
+    };
+    for (name, body) in sources {
         if name == SWEEP_FILE {
             continue;
         }

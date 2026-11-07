@@ -21,7 +21,8 @@ use saeptum_capsule::{
 };
 
 /// What every test in this suite returns.
-pub type Fallible = Result<(), Box<dyn std::error::Error>>;
+#[allow(unused_imports)]
+pub use test_support::Fallible;
 
 /// The first sandbox identifier the controller hands out.
 pub const FIRST_VM: u32 = 100;
