@@ -10,6 +10,7 @@
 //! nothing else: `drives` and `network-interfaces` are empty arrays, so no
 //! block device is attached and no tap device is needed or created.
 
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use saeptum_capsule::{GuestMemoryMib, VsockCid};
@@ -60,13 +61,21 @@ fn text<'p>(path: &'p Path, what: &str) -> Result<&'p str, MicroVmError> {
 ///
 /// # Errors
 ///
-/// Returns [`MicroVmError::Refused`] past [`MAX_SOCKET_PATH_BYTES`].
+/// Returns [`MicroVmError::Refused`] past [`MAX_SOCKET_PATH_BYTES`] or when the
+/// path carries an ASCII whitespace or control byte.
 pub fn check_socket_path(socket: &Path) -> Result<(), MicroVmError> {
     let length = socket.as_os_str().len();
     if length > MAX_SOCKET_PATH_BYTES {
         return Err(MicroVmError::Refused(format!(
             "the vsock socket path is {length} bytes; AF_UNIX allows {MAX_SOCKET_PATH_BYTES}"
         )));
+    }
+    for &byte in socket.as_os_str().as_bytes() {
+        if byte.is_ascii_whitespace() || byte.is_ascii_control() {
+            return Err(MicroVmError::Refused(format!(
+                "the vsock socket path carries disallowed byte 0x{byte:02x}"
+            )));
+        }
     }
     Ok(())
 }
