@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions nosec-reasons semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions nosec-reasons fetch-release semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions nosec-reasons semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions nosec-reasons fetch-release semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -55,6 +55,11 @@ mutant-exclusions:
 nosec-reasons:
 	@python3 -B tools/check_nosec.py --selftest
 	@python3 -B tools/check_nosec.py
+
+# Pinned release asset fetching: tries the release download route then falls
+# back to the API asset route; the selftest verifies fallback and digests.
+fetch-release:
+	@python3 -B tools/fetch_release.py --selftest
 
 # The public Rust API of each library crate against the merge base with
 # origin/main; a commit subject marked `!` allows a breaking change. The

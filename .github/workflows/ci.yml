@@ -95,17 +95,21 @@ jobs:
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo test --all-features
 
-      # The archive is held to its pinned digest before anything of it is
+      # The script holds the archive to its pinned digest before anything is
       # unpacked; a changed archive fails the comparison.
       - name: Install the pinned cargo-deny
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           archive="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
           cd "$RUNNER_TEMP"
-          curl --fail --silent --show-error --location --max-time 120 \
-            --output "${archive}.tar.gz" \
-            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${archive}.tar.gz"
-          echo "${CARGO_DENY_SHA256_LINUX}  ${archive}.tar.gz" | sha256sum -c -
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo EmbarkStudios/cargo-deny \
+            --tag "${CARGO_DENY_VERSION}" \
+            --asset "${archive}.tar.gz" \
+            --sha256 "${CARGO_DENY_SHA256_LINUX}" \
+            --out "${archive}.tar.gz"
           mkdir -p bin
           tar -xzf "${archive}.tar.gz" "${archive}/cargo-deny"
           install -m 0755 "${archive}/cargo-deny" bin/cargo-deny
@@ -127,6 +131,10 @@ jobs:
       - name: Refuse a nosec without rule ids and a reason
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_nosec.py
+
+      - name: Selftest the release fetch
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/fetch_release.py --selftest
 
   # Like the test job, it fails a draft in its first step rather than skipping
   # it in the job condition: a skipped job reports success.
@@ -166,11 +174,16 @@ jobs:
           rustup show active-toolchain
 
       - name: Install cargo-mutants
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           archive=cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
-          curl --fail --silent --show-error --location --max-time 120 -o "$archive" \
-            "https://github.com/sourcefrog/cargo-mutants/releases/download/v${CARGO_MUTANTS_VERSION}/${archive}"
-          echo "${CARGO_MUTANTS_SHA256_LINUX}  ${archive}" | sha256sum -c -
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo sourcefrog/cargo-mutants \
+            --tag "v${CARGO_MUTANTS_VERSION}" \
+            --asset "$archive" \
+            --sha256 "${CARGO_MUTANTS_SHA256_LINUX}" \
+            --out "$archive"
           mkdir -p "$RUNNER_TEMP/bin"
           tar -xzf "$archive" -C "$RUNNER_TEMP/bin" cargo-mutants
           rm "$archive"
@@ -236,11 +249,16 @@ jobs:
           fi
 
       - name: Install cargo-semver-checks
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           archive=cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz
-          curl --fail --silent --show-error --location --max-time 120 -o "$archive" \
-            "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v${CARGO_SEMVER_CHECKS_VERSION}/${archive}"
-          echo "${CARGO_SEMVER_CHECKS_SHA256_LINUX}  ${archive}" | sha256sum -c -
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo obi1kenobi/cargo-semver-checks \
+            --tag "v${CARGO_SEMVER_CHECKS_VERSION}" \
+            --asset "$archive" \
+            --sha256 "${CARGO_SEMVER_CHECKS_SHA256_LINUX}" \
+            --out "$archive"
           mkdir -p "$RUNNER_TEMP/bin"
           tar -xzf "$archive" -C "$RUNNER_TEMP/bin" cargo-semver-checks
           rm "$archive"
