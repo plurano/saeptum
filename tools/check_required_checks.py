@@ -41,6 +41,9 @@ TOP_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+|'[^']+'|\"[^\"]+\")\s*:(.*)$")
 TRIGGER_KEY_RE = re.compile(r"^  ([A-Za-z0-9_-]+|'[^']+'|\"[^\"]+\")\s*:(.*)$")
 JOB_ID_RE = re.compile(r"^  ([A-Za-z_][A-Za-z0-9_-]*)\s*:(.*)$")
 ATTR_RE = re.compile(r"^    ([A-Za-z0-9_-]+)\s*:(.*)$")
+TRIGGER_EVENT_RE = re.compile(r"^[a-z_]+$")
+PLAIN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()/+-]*$")
+QUOTED_NAME_RE = re.compile(r"^[ -~]+$")
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,21 @@ class Job:
         return self.name if self.name is not None else self.job_id
 
 
+def _strip_quotes(s: str) -> str:
+    """Strip one pair of matching outer single or double quotes."""
+    if len(s) >= 2 and ((s[0] == "'" and s[-1] == "'") or (s[0] == '"' and s[-1] == '"')):
+        return s[1:-1]
+    return s
+
+
+def _check_block_indent(
+    filename: str, lineno: int, indent: int, child_indent: int, has_child: bool
+) -> None:
+    """Validate line indentation within a block."""
+    if indent in (1, 3) or indent < child_indent or (indent > child_indent and not has_child):
+        raise ValueError(f"{filename}:{lineno}: invalid indentation ({indent} spaces)")
+
+
 def _parse_quoted_name(s: str, q: str, filename: str, line_num: int) -> str:
     """Parse single- or double-quoted job name."""
     second = s.find(q, 1)
@@ -73,6 +91,8 @@ def _parse_quoted_name(s: str, q: str, filename: str, line_num: int) -> str:
         raise ValueError(f"{filename}:{line_num}: escapes not allowed in quoted name")
     if not inner:
         raise ValueError(f"{filename}:{line_num}: empty job name")
+    if not QUOTED_NAME_RE.match(inner):
+        raise ValueError(f"{filename}:{line_num}: job name outside the allowed character set")
     return inner
 
 
@@ -82,15 +102,15 @@ def _parse_plain_name(s: str, filename: str, line_num: int) -> str:
         s = s.split(" #", 1)[0].rstrip()
     if not s:
         raise ValueError(f"{filename}:{line_num}: empty job name")
-    if s[0] in ("&", "*", "!", "|", ">", "'", '"'):
-        raise ValueError(f"{filename}:{line_num}: invalid plain scalar job name")
+    if not PLAIN_NAME_RE.match(s):
+        raise ValueError(f"{filename}:{line_num}: job name outside the allowed character set")
     return s
 
 
 def parse_job_name(val: str, filename: str, line_num: int) -> str:
     """Parse and validate a job 'name:' attribute value."""
     s = val.strip()
-    if not s:
+    if not s or s.startswith("#"):
         raise ValueError(f"{filename}:{line_num}: empty job name")
     if "${{" in s:
         raise ValueError(f"{filename}:{line_num}: dynamic '${{{{...}}}}' in job name")
@@ -116,13 +136,16 @@ def _parse_on_inline(filename: str, line_num: int, remainder: str) -> set[str]:
             raise ValueError(f"{filename}:{line_num}: empty flow list in 'on:'")
         triggers: set[str] = set()
         for item in inner.split(",")[:MAX_LINES]:
-            tok = item.strip().strip("'\"")
-            if not tok:
+            raw = item.strip()
+            if not raw:
                 raise ValueError(f"{filename}:{line_num}: empty item in 'on:' flow list")
+            tok = _strip_quotes(raw)
+            if not TRIGGER_EVENT_RE.match(tok):
+                raise ValueError(f"{filename}:{line_num}: invalid trigger in 'on:' flow list")
             triggers.add(tok)
         return triggers
-    tok = rem.strip("'\"")
-    if not tok or any(c.isspace() for c in tok):
+    tok = _strip_quotes(rem)
+    if not TRIGGER_EVENT_RE.match(tok):
         raise ValueError(f"{filename}:{line_num}: invalid inline scalar in 'on:'")
     return {tok}
 
@@ -132,6 +155,7 @@ def _parse_on_block(
 ) -> tuple[set[str], int]:
     """Parse block mapping form of 'on:' starting at start_idx."""
     triggers: set[str] = set()
+    has_trigger = False
     idx = start_idx
     max_idx = min(len(lines), start_idx + MAX_LINES)
     for i in range(start_idx, max_idx):
@@ -143,13 +167,16 @@ def _parse_on_block(
         indent = len(line) - len(line.lstrip(" "))
         if indent == 0:
             break
-        if indent in (1, 3):
-            raise ValueError(f"{filename}:{i + 1}: invalid indentation ({indent} spaces)")
+        _check_block_indent(filename, i + 1, indent, 2, has_trigger)
         if indent == 2:
             m = TRIGGER_KEY_RE.match(line)
             if not m:
                 raise ValueError(f"{filename}:{i + 1}: invalid trigger key in 'on:'")
-            triggers.add(m.group(1).strip("'\""))
+            key = _strip_quotes(m.group(1))
+            if not TRIGGER_EVENT_RE.match(key):
+                raise ValueError(f"{filename}:{i + 1}: invalid trigger key in 'on:'")
+            triggers.add(key)
+            has_trigger = True
         idx = i + 1
     return triggers, idx
 
@@ -246,8 +273,10 @@ def _parse_jobs_block(
         indent = len(line) - len(line.lstrip(" "))
         if indent == 0:
             break
-        if indent in (1, 3):
-            raise ValueError(f"{filename}:{i + 1}: invalid indentation ({indent} spaces)")
+        if cur_id is None:
+            _check_block_indent(filename, i + 1, indent, 2, False)
+        elif indent != 2:
+            _check_block_indent(filename, i + 1, indent, 4, bool(cur_attrs))
         if indent == 2:
             _flush_job(jobs, filename, cur_id, cur_line, cur_name, cur_uses)
             cur_id = _parse_job_header(line, filename, i + 1, seen_ids)
@@ -528,6 +557,8 @@ def _load_ruleset(path: Path) -> tuple[dict[str, Any] | None, str, str | None]:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         return None, "", f"{path}:{exc.lineno}: invalid JSON: {exc}"
+    if not isinstance(data, dict):
+        return None, text, f"{path}: ruleset root must be a JSON object"
     return data, text, None
 
 
@@ -561,12 +592,16 @@ def scan_repository(root: Path) -> tuple[int, list[str]]:
     ruleset_path = root / ".github" / "rulesets" / "main.json"
 
     ruleset_data, ruleset_text, err = _load_ruleset(ruleset_path)
-    if err is not None or ruleset_data is None:
-        return 2, [err or "ruleset load error"]
+    if err is not None:
+        return 2, [err]
+    if ruleset_data is None:
+        return 2, [f"{ruleset_path}: ruleset load error"]
 
     workflows, wf_err = _load_workflows(wf_dir, root)
-    if wf_err is not None or workflows is None:
-        return 2, [wf_err or "workflow load error"]
+    if wf_err is not None:
+        return 2, [wf_err]
+    if workflows is None:
+        return 2, [f"{wf_dir}: workflow load error"]
 
     return evaluate_required_checks(
         workflows=workflows,
@@ -946,6 +981,204 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
         ["not", "an", "object"],
         2,
         "ruleset root must be a JSON object",
+    ),
+    (
+        "indent > 2 before first trigger key -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non:\n    pull_request:\njobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset([]),
+        2,
+        "invalid indentation (4 spaces)",
+    ),
+    (
+        "indent > 4 before first job attribute -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n      name: Build\n"
+            )
+        },
+        _make_ruleset(["build"]),
+        2,
+        "invalid indentation (6 spaces)",
+    ),
+    (
+        "indent > 2 before first job header -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n      build:\n        name: Build\n"
+            )
+        },
+        _make_ruleset([]),
+        2,
+        "invalid indentation (6 spaces)",
+    ),
+    (
+        "flow mapping in on: -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: {pull_request:}\njobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset([]),
+        2,
+        "invalid inline scalar in 'on:'",
+    ),
+    (
+        "flow mapping item in on: flow list -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: [push, {pull_request: {}}]\njobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset([]),
+        2,
+        "invalid trigger in 'on:' flow list",
+    ),
+    (
+        "name with comment only = empty -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: #c\n"
+            )
+        },
+        _make_ruleset(["#c"]),
+        2,
+        "empty job name",
+    ),
+    (
+        "plain name with colon -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: Build: Test\n"
+            )
+        },
+        _make_ruleset(["Build: Test"]),
+        2,
+        "job name outside the allowed character set",
+    ),
+    (
+        "flow sequence as name -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: [Build]\n"
+            )
+        },
+        _make_ruleset(["[Build]"]),
+        2,
+        "job name outside the allowed character set",
+    ),
+    (
+        "nested trigger value at indent 4 -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non:\n  pull_request:\n    branches: [main]\n"
+                "jobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "double-quoted on: pull_request -> 0",
+        {
+            "ci.yml": (
+                'name: CI\non: "pull_request"\njobs:\n  build:\n    name: Build\n'
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "single-quoted on: pull_request -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: 'pull_request'\njobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "job steps at indent 6 after attribute -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n"
+                "    name: Build\n    steps:\n      - run: x\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "plain name with parens and dashes -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  check:\n"
+                "    name: Public API (cargo-semver-checks)\n"
+            )
+        },
+        _make_ruleset(["Public API (cargo-semver-checks)"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "plain name Mutation testing (changed code) -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  test:\n"
+                "    name: Mutation testing (changed code)\n"
+            )
+        },
+        _make_ruleset(["Mutation testing (changed code)"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "quoted name with colon -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: 'Build: all'\n"
+            )
+        },
+        _make_ruleset(["Build: all"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "quoted name with non-ASCII emoji -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: 'Build \U0001f525'\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "job name outside the allowed character set",
+    ),
+    (
+        "quoted name with control character -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: \"Build \x07\"\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "job name outside the allowed character set",
+    ),
+    (
+        "ruleset root None -> 2",
+        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: Test\n"},
+        None,
+        2,
+        ".github/rulesets/main.json: ruleset root must be a JSON object",
     ),
 )
 
