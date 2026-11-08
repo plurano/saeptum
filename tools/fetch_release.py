@@ -28,6 +28,7 @@ import subprocess  # nosec B404  # runs only curl and gh, fixed argv list, never
 import sys
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -252,38 +253,26 @@ class ScriptedRunner:
         return step.rc
 
 
+_VALID_BYTES = b"sample valid archive content"
+_VALID_SHA256 = hashlib.sha256(_VALID_BYTES).hexdigest()
+
+
+@dataclass(frozen=True)
 class SelftestCase:
     """Test case configuration for selftest."""
 
-    def __init__(
-        self,
-        name: str,
-        steps: list[FakeStep],
-        expected_rc: int,
-        expected_calls: int,
-        expected_out_exists: bool,
-        repo: str = "owner/repo",
-        tag: str = "v1.0.0",
-        asset: str = "asset-1.0.0.tar.gz",
-        sha256: str = "",
-        check_warning: bool = False,
-        check_argv: bool = False,
-    ) -> None:
-        self.name = name
-        self.steps = steps
-        self.expected_rc = expected_rc
-        self.expected_calls = expected_calls
-        self.expected_out_exists = expected_out_exists
-        self.repo = repo
-        self.tag = tag
-        self.asset = asset
-        self.sha256 = sha256 or _VALID_SHA256
-        self.check_warning = check_warning
-        self.check_argv = check_argv
+    name: str
+    steps: list[FakeStep]
+    expected_rc: int
+    expected_calls: int
+    expected_out_exists: bool
+    repo: str = "owner/repo"
+    tag: str = "v1.0.0"
+    asset: str = "asset-1.0.0.tar.gz"
+    sha256: str = _VALID_SHA256
+    check_warning: bool = False
+    check_argv: bool = False
 
-
-_VALID_BYTES = b"sample valid archive content"
-_VALID_SHA256 = hashlib.sha256(_VALID_BYTES).hexdigest()
 
 SELFTEST_CASES: tuple[SelftestCase, ...] = (
     SelftestCase(
