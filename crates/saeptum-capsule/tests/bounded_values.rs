@@ -4,9 +4,11 @@
 //! The bounded identifiers and sizes, at their edges.
 //!
 //! Positive: a value inside its bound parses and reads back byte for byte.
-//! Negative: an empty value, one outside the charset and one outside the range
-//! are each refused rather than truncated. Boundary: the last admissible byte
-//! is accepted and the first inadmissible one is not.
+//! Negative: an empty value, one outside the charset, one outside the range,
+//! and an input both over-long and outside the charset are each refused rather
+//! than truncated, pinning the refusal order. Boundary: the last admissible
+//! byte is accepted, the first inadmissible one is not, and the length readers
+//! are usable in const context.
 
 mod common;
 
@@ -95,6 +97,31 @@ fn an_identifier_refusal_is_carried_into_the_controller_error() {
     assert_ne!(too_long, refused);
 }
 
+/// Negative: an identifier both over-long and outside the permitted charset is
+/// refused on length first, pinning the refusal order.
+#[test]
+fn an_overlong_and_invalid_identifier_is_refused_on_length_first() {
+    let over_len = MAX_LABEL_LEN.saturating_add(1);
+    let bad_label = "!".repeat(over_len);
+    assert_eq!(
+        Label::parse(&bad_label),
+        Err(IdError::TooLong {
+            max: MAX_LABEL_LEN,
+            actual: over_len,
+        })
+    );
+
+    let over_corr = MAX_CORRELATION_LEN.saturating_add(1);
+    let bad_corr = "!".repeat(over_corr);
+    assert_eq!(
+        CorrelationId::parse(&bad_corr),
+        Err(IdError::TooLong {
+            max: MAX_CORRELATION_LEN,
+            actual: over_corr,
+        })
+    );
+}
+
 // --- Boundary -------------------------------------------------------------
 
 /// Boundary: the last admissible byte is accepted and the first inadmissible
@@ -139,5 +166,34 @@ fn the_guest_memory_range_is_closed_at_both_ends() -> Fallible {
     );
     assert!(GuestMemoryMib::new(MAX_GUEST_MEMORY_MIB.saturating_add(1)).is_err());
     assert!(GuestMemoryMib::new(MIN_GUEST_MEMORY_MIB.saturating_sub(1)).is_err());
+    Ok(())
+}
+
+// `const fn` readers: dropping `const` from `len` or `is_empty` fails this
+// file's build (HISS-14; consumers pinned at 997a1b3 call them in const context).
+const fn label_len(label: &Label) -> usize {
+    label.len()
+}
+const fn label_is_empty(label: &Label) -> bool {
+    label.is_empty()
+}
+const fn correlation_len(id: &CorrelationId) -> usize {
+    id.len()
+}
+const fn correlation_is_empty(id: &CorrelationId) -> bool {
+    id.is_empty()
+}
+
+/// Boundary: dropping `const` from `len` or `is_empty` fails the build, and
+/// the readers return the expected values at runtime.
+#[test]
+fn the_length_readers_are_usable_in_const_context() -> Fallible {
+    let label = Label::parse(CAPSULE)?;
+    assert_eq!(label_len(&label), CAPSULE.len());
+    assert!(!label_is_empty(&label));
+
+    let correlation = CorrelationId::parse(CORRELATION)?;
+    assert_eq!(correlation_len(&correlation), CORRELATION.len());
+    assert!(!correlation_is_empty(&correlation));
     Ok(())
 }

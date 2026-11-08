@@ -3,9 +3,10 @@
 
 //! Epic E06-2: the bounded capsule table and its capability set.
 //!
-//! Positive: 128 capsules are accepted. Negative: an unknown slot holds
-//! nothing and a capability that was not granted is not allowed. Boundary: the
-//! 129th capsule is refused, and slot 128 is the last one that parses.
+//! Positive: 128 capsules are accepted, and the default table is empty.
+//! Negative: an unknown slot holds nothing and a capability that was not
+//! granted is not allowed. Boundary: the 129th capsule is refused, and slot 128
+//! is the last one that parses.
 //!
 //! Nothing here loads a `WebAssembly` module.
 
@@ -19,6 +20,17 @@ use saeptum_capsule::{
 use common::{CAPSULE, CAPSULE_BYTES, Fallible, filled_registry, label, scaffold_capabilities};
 
 // --- Positive -------------------------------------------------------------
+
+/// Positive: the default table is empty, allocates no memory, and holds no
+/// slot.
+#[test]
+fn the_default_table_is_the_empty_table() {
+    let registry = CapsuleRegistry::default();
+    assert_eq!(registry.count(), 0);
+    assert!(registry.is_empty());
+    assert_eq!(registry.permitted_memory_bytes(), 0);
+    assert!(registry.get(CapsuleSlot::FIRST).is_none());
+}
 
 /// Positive: the table accepts the full 128 capsules.
 #[test]

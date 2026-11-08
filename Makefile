@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions
+verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -48,3 +48,12 @@ licences:
 mutant-exclusions:
 	@python3 -B tools/check_mutant_exclusions.py --selftest
 	@python3 -B tools/check_mutant_exclusions.py
+
+# The public Rust API of each library crate against the merge base with
+# origin/main; a commit subject marked `!` allows a breaking change. The
+# selftest verifies the package selection and the subject rule first.
+SEMVER_BASE ?= $(shell git merge-base origin/main HEAD 2>/dev/null)
+semver-scope:
+	@python3 -B tools/semver_scope.py --selftest
+	@test -n "$(SEMVER_BASE)" || { printf '%s\n' 'FAIL: no merge base with origin/main' >&2; exit 1; }
+	@python3 -B tools/semver_scope.py check --baseline-rev $(SEMVER_BASE)
