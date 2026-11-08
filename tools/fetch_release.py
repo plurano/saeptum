@@ -35,17 +35,14 @@ TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
-ROUTES: tuple[tuple[str, int], ...] = (
-    ("release download route", 600),
-    ("API asset route (gh release download)", 300),
-)
 CHUNK_SIZE = 64 * 1024
 Runner = Callable[[list[str], int], int]
+ArgvBuilder = Callable[[str, str, str, str], list[str]]
 
 
 def default_runner(argv: list[str], timeout: int) -> int:
     """Execute command with timeout, returning returncode."""
-    proc = subprocess.run(  # nosec B603 B607  # fixed curl or gh argv, no shell, found on PATH
+    proc = subprocess.run(  # nosec B603  # fixed curl or gh argv, no shell, found on PATH
         argv,
         check=False,
         timeout=timeout,
@@ -53,25 +50,28 @@ def default_runner(argv: list[str], timeout: int) -> int:
     return proc.returncode
 
 
-def route_argv(route_name: str, repo: str, tag: str, asset: str, out: str) -> list[str]:
-    """Build argv list for the specified route."""
-    if route_name == "release download route":
-        return [
-            "curl",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--location",
-            "--max-time",
-            "120",
-            "--retry",
-            "3",
-            "--retry-max-time",
-            "300",
-            "--output",
-            out,
-            f"https://github.com/{repo}/releases/download/{tag}/{asset}",
-        ]
+def _web_route_argv(repo: str, tag: str, asset: str, out: str) -> list[str]:
+    """Build argv list for curl release download route."""
+    return [
+        "curl",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--max-time",
+        "120",
+        "--retry",
+        "3",
+        "--retry-max-time",
+        "300",
+        "--output",
+        out,
+        f"https://github.com/{repo}/releases/download/{tag}/{asset}",
+    ]
+
+
+def _api_route_argv(repo: str, tag: str, asset: str, out: str) -> list[str]:
+    """Build argv list for gh API asset route."""
     return [
         "gh",
         "release",
@@ -85,6 +85,12 @@ def route_argv(route_name: str, repo: str, tag: str, asset: str, out: str) -> li
         out,
         "--clobber",
     ]
+
+
+ROUTES: tuple[tuple[str, int, ArgvBuilder], ...] = (
+    ("release download route", 600, _web_route_argv),
+    ("API asset route (gh release download)", 300, _api_route_argv),
+)
 
 
 def compute_sha256(path: Path) -> str:
@@ -157,9 +163,9 @@ def fetch_release(
     except OSError as exc:
         sys.stderr.write(f"error: cannot create output directory {out.parent}: {exc}\n")
         return 1
-    for route_idx, (route_name, timeout) in enumerate(ROUTES):
+    for route_idx, (route_name, timeout, build) in enumerate(ROUTES):
         out.unlink(missing_ok=True)
-        argv = route_argv(route_name, repo, tag, asset, str(out))
+        argv = build(repo, tag, asset, str(out))
         failed, reason = _execute_route(runner, argv, timeout, out)
         if failed:
             out.unlink(missing_ok=True)
@@ -225,7 +231,7 @@ class ScriptedRunner:
         return step.rc
 
 
-class TestCase:
+class SelftestCase:
     """Test case configuration for selftest."""
 
     def __init__(
@@ -258,15 +264,15 @@ class TestCase:
 _VALID_BYTES = b"sample valid archive content"
 _VALID_SHA256 = hashlib.sha256(_VALID_BYTES).hexdigest()
 
-SELFTEST_CASES: tuple[TestCase, ...] = (
-    TestCase(
+SELFTEST_CASES: tuple[SelftestCase, ...] = (
+    SelftestCase(
         "web route ok, right bytes",
         [FakeStep(0, write_bytes=_VALID_BYTES)],
         expected_rc=0,
         expected_calls=1,
         expected_out_exists=True,
     ),
-    TestCase(
+    SelftestCase(
         "web route rc 22, gh ok right bytes",
         [FakeStep(22), FakeStep(0, write_bytes=_VALID_BYTES)],
         expected_rc=0,
@@ -274,7 +280,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=True,
         check_warning=True,
     ),
-    TestCase(
+    SelftestCase(
         "web route timeout, gh ok",
         [
             FakeStep(exc=subprocess.TimeoutExpired(["curl"], 600)),
@@ -284,7 +290,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_calls=2,
         expected_out_exists=True,
     ),
-    TestCase(
+    SelftestCase(
         "web route OSError (curl missing), gh ok",
         [
             FakeStep(exc=OSError("curl: command not found")),
@@ -294,35 +300,42 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_calls=2,
         expected_out_exists=True,
     ),
-    TestCase(
+    SelftestCase(
         "web route rc 0 but writes nothing, gh ok",
         [FakeStep(0), FakeStep(0, write_bytes=_VALID_BYTES)],
         expected_rc=0,
         expected_calls=2,
         expected_out_exists=True,
     ),
-    TestCase(
+    SelftestCase(
         "web route rc 22 after writing partial bytes, gh rc 1",
         [FakeStep(22, write_bytes=b"partial"), FakeStep(1)],
         expected_rc=1,
         expected_calls=2,
         expected_out_exists=False,
     ),
-    TestCase(
+    SelftestCase(
+        "web route rc 22, gh rc 1 after writing partial bytes",
+        [FakeStep(22), FakeStep(1, write_bytes=b"partial")],
+        expected_rc=1,
+        expected_calls=2,
+        expected_out_exists=False,
+    ),
+    SelftestCase(
         "web route ok wrong bytes",
         [FakeStep(0, write_bytes=b"wrong content")],
         expected_rc=1,
         expected_calls=1,
         expected_out_exists=False,
     ),
-    TestCase(
+    SelftestCase(
         "web route rc 22, gh ok wrong bytes",
         [FakeStep(22), FakeStep(0, write_bytes=b"wrong content")],
         expected_rc=1,
         expected_calls=2,
         expected_out_exists=False,
     ),
-    TestCase(
+    SelftestCase(
         "argv matches expected route-1 and route-2 lists",
         [FakeStep(22), FakeStep(0, write_bytes=_VALID_BYTES)],
         expected_rc=0,
@@ -330,7 +343,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=True,
         check_argv=True,
     ),
-    TestCase(
+    SelftestCase(
         "bad argument sha256 63 hex",
         [],
         expected_rc=2,
@@ -338,7 +351,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         sha256="a" * 63,
     ),
-    TestCase(
+    SelftestCase(
         "bad argument sha256 uppercase",
         [],
         expected_rc=2,
@@ -346,7 +359,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         sha256=_VALID_SHA256.upper(),
     ),
-    TestCase(
+    SelftestCase(
         "bad argument repo owner",
         [],
         expected_rc=2,
@@ -354,7 +367,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         repo="owner",
     ),
-    TestCase(
+    SelftestCase(
         "bad argument repo ../x",
         [],
         expected_rc=2,
@@ -362,7 +375,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         repo="../x",
     ),
-    TestCase(
+    SelftestCase(
         "bad argument repo owner/name/extra",
         [],
         expected_rc=2,
@@ -370,7 +383,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         repo="owner/name/extra",
     ),
-    TestCase(
+    SelftestCase(
         "bad argument tag -v1",
         [],
         expected_rc=2,
@@ -378,7 +391,7 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
         expected_out_exists=False,
         tag="-v1",
     ),
-    TestCase(
+    SelftestCase(
         "bad argument asset a b",
         [],
         expected_rc=2,
@@ -389,7 +402,9 @@ SELFTEST_CASES: tuple[TestCase, ...] = (
 )
 
 
-def _check_argv_match(case: TestCase, runner: ScriptedRunner, case_out: Path) -> bool:
+def _check_argv_match(
+    case: SelftestCase, runner: ScriptedRunner, case_out: Path
+) -> bool:
     """Assert argv and timeouts for route 1 and route 2."""
     exp_argv_1 = [
         "curl",
@@ -425,7 +440,7 @@ def _check_argv_match(case: TestCase, runner: ScriptedRunner, case_out: Path) ->
     return runner.calls[1] == (exp_argv_2, 300)
 
 
-def _run_single_case(case: TestCase, case_out: Path) -> bool:
+def _run_single_case(case: SelftestCase, case_out: Path) -> bool:
     """Run one selftest case and return True if all assertions hold."""
     runner = ScriptedRunner(case.steps)
     buf_out = io.StringIO()
