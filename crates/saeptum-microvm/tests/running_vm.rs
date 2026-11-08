@@ -9,8 +9,9 @@
 //! host half runs end to end over a real socket.
 //!
 //! Positive: a started row writes the controller's memory and context
-//! identifier into its configuration, one exchange round-trips, and stopping
-//! reaps the process and removes the socket. Negative: a guest `ERROR`
+//! identifier into its configuration, one exchange round-trips, a handshake
+//! closed before its acknowledgement is polled again, and stopping reaps the
+//! process and removes the socket. Negative: a guest `ERROR`
 //! answer, a guest stream closed before a newline, a request with a newline,
 //! a process that exits before its guest accepts, a missing binary and an
 //! occupied directory are each refused. Boundary: an answer of exactly its
@@ -22,7 +23,7 @@
 mod common;
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 
@@ -35,26 +36,51 @@ use common::{
     EXITS_AT_ONCE, FIRST_CID, FIRST_VM, Fallible, PORT, STAYS_UP, admitted, scratch, start,
 };
 
-/// Plays Firecracker's side: acknowledges one `CONNECT`, then answers the
-/// request line with `answer`. Returns what the guest was asked.
+/// Plays Firecracker's side on one accepted `stream`: acknowledges its
+/// `CONNECT`, then answers the request line with `answer`. Returns what the
+/// guest was asked.
+fn serve(stream: &UnixStream, answer: &str) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut connect = String::new();
+    let mut request = String::new();
+    let mut writer = stream;
+    let _ = reader.read_line(&mut connect);
+    if connect != connect_command(PORT) {
+        return format!("unexpected handshake {connect:?}");
+    }
+    let _ = writer.write_all(b"OK 1073741825\n");
+    let _ = reader.read_line(&mut request);
+    let _ = writer.write_all(answer.as_bytes());
+    request
+}
+
+/// Plays Firecracker's side for one connection; see [`serve`].
 fn fake_device(socket: &Path, answer: String) -> std::io::Result<JoinHandle<String>> {
     let listener = UnixListener::bind(socket)?;
     Ok(std::thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return String::new();
         };
-        let mut reader = BufReader::new(&stream);
+        serve(&stream, &answer)
+    }))
+}
+
+/// Plays Firecracker while the guest is not listening yet: the first
+/// connection is closed after its `CONNECT`, before any acknowledgement; the
+/// second is served as by [`fake_device`].
+fn fake_device_late(socket: &Path, answer: String) -> std::io::Result<JoinHandle<String>> {
+    let listener = UnixListener::bind(socket)?;
+    Ok(std::thread::spawn(move || {
+        let Ok((early, _)) = listener.accept() else {
+            return String::new();
+        };
         let mut connect = String::new();
-        let mut request = String::new();
-        let mut writer = &stream;
-        let _ = reader.read_line(&mut connect);
-        if connect != connect_command(PORT) {
-            return format!("unexpected handshake {connect:?}");
-        }
-        let _ = writer.write_all(b"OK 1073741825\n");
-        let _ = reader.read_line(&mut request);
-        let _ = writer.write_all(answer.as_bytes());
-        request
+        let _ = BufReader::new(&early).read_line(&mut connect);
+        drop(early);
+        let Ok((stream, _)) = listener.accept() else {
+            return String::new();
+        };
+        serve(&stream, &answer)
     }))
 }
 
@@ -114,6 +140,21 @@ fn one_exchange_round_trips_and_stop_cleans_up() -> Fallible {
             .join(SOCKET_NAME)
             .exists()
     );
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+/// Positive: a handshake the device closes before its acknowledgement (the
+/// guest not listening yet) is polled again, not refused.
+#[test]
+fn a_handshake_closed_before_its_ack_is_retried() -> Fallible {
+    let dir = scratch("retry")?;
+    let mut vm = start(&dir, STAYS_UP, None)?;
+    let device = fake_device_late(vm.socket(), "verdict accepted\n".to_owned())?;
+    assert_eq!(vm.exchange(PORT, "evaluate", 64)?, "verdict accepted");
+    let asked = device.join().map_err(|_| "the fake device panicked")?;
+    assert_eq!(asked, "evaluate\n");
+    vm.stop()?;
     std::fs::remove_dir_all(dir)?;
     Ok(())
 }
