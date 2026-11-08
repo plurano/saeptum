@@ -206,6 +206,24 @@ jobs:
       # The mutants job's toolchain step, by alias.
       - *pinned-toolchain
 
+      # Firecracker runs x86_64 and aarch64 guests, and saeptum-microvm's
+      # public BOOT_TIMER_ADDRESS differs per architecture, so the API is
+      # checked for both; rustdoc needs the aarch64 standard library only.
+      - name: Add the aarch64 standard library
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      # macOS and Windows get no leg: saeptum-microvm builds only on Linux
+      # (AF_VSOCK through socket2 exists only on Linux and Android), and
+      # every other crate has no OS-conditional item, so its API is the same
+      # on every host. This step fails once an OS-conditional item appears;
+      # the gate then needs a leg per OS.
+      - name: Refuse OS-conditional items
+        run: |
+          if grep -rnE 'cfg(_attr)?\(.*(target_os|target_family|unix|windows)' crates/; then
+            echo "FAIL: OS-conditional code found; run the API gate on each OS it builds on" >&2
+            exit 1
+          fi
+
       - name: Install cargo-semver-checks
         run: |
           archive=cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz
@@ -228,4 +246,6 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           cargo semver-checks --version
-          python3 -B tools/semver_scope.py check --baseline-rev "$BASE_SHA" --subject="$PR_TITLE"
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            python3 -B tools/semver_scope.py check --baseline-rev "$BASE_SHA" --subject="$PR_TITLE" --target "$target" || exit 1
+          done

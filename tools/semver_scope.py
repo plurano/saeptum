@@ -10,8 +10,9 @@ Evaluates git commit subjects or PR title for breaking change markers:
 `^[a-z]+(\\([^)]*\\))?!:`.
 
 Validates inputs against strict formats: baseline revisions are validated and
-resolved to concrete commit IDs before any command execution, and package names
-are verified against Cargo package naming rules.
+resolved to concrete commit IDs before any command execution, package names
+are verified against Cargo package naming rules, and target triples are validated
+before execution.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ REVISION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 COMMIT_ID_PATTERN = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # Cargo's package-name grammar, ASCII subset, crates.io length cap.
 PACKAGE_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}")
+# A rustc target triple; no leading '-', no shell metacharacter.
+TARGET_PATTERN = re.compile(r"[a-z0-9_]+(-[a-z0-9_.]+){1,3}")
 
 
 def _run_git(args: list[str], timeout: int) -> str:
@@ -85,6 +88,23 @@ def is_breaking(subject: str) -> bool:
     return bool(BREAKING_PATTERN.match(subject))
 
 
+def _opted_out(pkg: dict) -> bool:
+    """Return True if package is opted out via public-api = false."""
+    pkg_meta = pkg.get("metadata")
+    if not isinstance(pkg_meta, dict):
+        return False
+    saeptum_meta = pkg_meta.get("saeptum")
+    if not isinstance(saeptum_meta, dict) or "public-api" not in saeptum_meta:
+        return False
+    val = saeptum_meta["public-api"]
+    if val is False:
+        return True
+    if val is True:
+        return False
+    name = pkg.get("name", "")
+    raise ValueError(f"package {name!r}: invalid saeptum.public-api value {val!r}")
+
+
 def select_packages(metadata: dict) -> list[str]:
     """Select workspace library packages, excluding those marked public-api = false."""
     all_pkgs = metadata.get("packages", [])
@@ -101,24 +121,12 @@ def select_packages(metadata: dict) -> list[str]:
 
     selected: list[str] = []
     for pkg in pkgs:
-        name = pkg.get("name", "")
         targets = pkg.get("targets", [])
         if not any("lib" in t.get("kind", []) for t in targets):
             continue
-
-        pkg_meta = pkg.get("metadata")
-        if isinstance(pkg_meta, dict):
-            saeptum_meta = pkg_meta.get("saeptum")
-            if isinstance(saeptum_meta, dict) and "public-api" in saeptum_meta:
-                val = saeptum_meta["public-api"]
-                if val is False:
-                    continue
-                if val is not True:
-                    raise ValueError(
-                        f"package {name!r}: invalid saeptum.public-api value {val!r}"
-                    )
-
-        selected.append(name)
+        if _opted_out(pkg):
+            continue
+        selected.append(pkg.get("name", ""))
 
     return sorted(selected)
 
@@ -168,6 +176,7 @@ def build_check_argv(
     commit_id: str,
     packages: list[str],
     subjects: list[str],
+    target: str | None = None,
 ) -> tuple[list[str], str, str]:
     """Construct the cargo-semver-checks command and release-type rationale.
 
@@ -181,6 +190,10 @@ def build_check_argv(
     for pkg in packages:
         if not PACKAGE_PATTERN.fullmatch(pkg):
             raise ValueError(f"invalid package name {pkg!r}")
+    if target is not None and (
+        len(target) > 64 or not TARGET_PATTERN.fullmatch(target)
+    ):
+        raise ValueError(f"target {target!r} refused: not a target triple")
 
     breaking_subjects = [s for s in subjects if is_breaking(s)]
     is_major = len(breaking_subjects) > 0
@@ -193,6 +206,8 @@ def build_check_argv(
         "--color",
         "never",
     ]
+    if target is not None:
+        argv.extend(["--target", target])
     for pkg in packages:
         argv.extend(["--package", pkg])
     if is_major:
@@ -231,6 +246,7 @@ def cmd_packages(timeout: int = 120) -> int:
 def cmd_check(
     baseline_rev: str,
     cli_subjects: list[str],
+    target: str | None = None,
     timeout: int = 1800,
 ) -> int:
     """Run cargo-semver-checks across all selected packages."""
@@ -242,6 +258,7 @@ def cmd_check(
             commit_id=commit_id,
             packages=packages,
             subjects=subjects,
+            target=target,
         )
     except ValueError as exc:
         print(f"FAIL: {describe_failure(exc)}", file=sys.stderr)
@@ -504,6 +521,67 @@ def _subcommand_failures() -> list[str]:
     return failures
 
 
+def _target_failures() -> list[str]:
+    """Case (k): target triple validation and argv generation."""
+    failures = []
+    cid = "a" * 40
+    try:
+        argv_aarch64, _, _ = build_check_argv(
+            cid, ["a"], [], "aarch64-unknown-linux-gnu"
+        )
+        if "--target" not in argv_aarch64:
+            failures.append("(k) build_check_argv did not include '--target'")
+        else:
+            idx = argv_aarch64.index("--target")
+            if (
+                idx + 1 >= len(argv_aarch64)
+                or argv_aarch64[idx + 1] != "aarch64-unknown-linux-gnu"
+            ):
+                failures.append(
+                    "(k) build_check_argv '--target' not followed by 'aarch64-unknown-linux-gnu'"
+                )
+    except ValueError as exc:
+        failures.append(
+            f"(k) build_check_argv refused valid target 'aarch64-unknown-linux-gnu': {exc}"
+        )
+
+    try:
+        argv_x86, _, _ = build_check_argv(cid, ["a"], [], "x86_64-unknown-linux-gnu")
+        if (
+            "--target" not in argv_x86
+            or argv_x86[argv_x86.index("--target") + 1] != "x86_64-unknown-linux-gnu"
+        ):
+            failures.append(
+                "(k) build_check_argv '--target' not followed by 'x86_64-unknown-linux-gnu'"
+            )
+    except ValueError as exc:
+        failures.append(
+            f"(k) build_check_argv refused valid target 'x86_64-unknown-linux-gnu': {exc}"
+        )
+
+    argv_none, _, _ = build_check_argv(cid, ["a"], [], None)
+    if "--target" in argv_none:
+        failures.append("(k) build_check_argv included '--target' when target is None")
+
+    refusals = [
+        "--x",
+        "a;b",
+        "",
+        "x86_64",
+        "X86_64-unknown-linux-gnu",
+        "a-" + "b" * 70,
+    ]
+    for bad_target in refusals:
+        try:
+            build_check_argv(cid, ["a"], [], bad_target)
+            failures.append(
+                f"(k) build_check_argv accepted invalid target {bad_target!r}"
+            )
+        except ValueError:
+            pass
+    return failures
+
+
 def selftest() -> bool:
     """Run planted cases verifying package selection, subject logic, and refusal."""
     failures = (
@@ -516,19 +594,20 @@ def selftest() -> bool:
         + _failure_text_failures()
         + _unknown_revision_failures()
         + _subcommand_failures()
+        + _target_failures()
     )
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     if failures:
         return False
     print(
-        "PASS: semver scope selection, subjects, refusal, input formats, argv and failure text verified."
+        "PASS: semver scope selection, subjects, refusal, input formats, argv, failure text and target verified."
     )
     return True
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """The command line: `packages`, `selftest`, or `check --baseline-rev REV [--subject TEXT]...`."""
+    """The command line: `packages`, `selftest`, or `check --baseline-rev REV [--subject TEXT]... [--target TRIPLE]`."""
     parser = argparse.ArgumentParser(
         description="Filter and check public Rust API semver scope."
     )
@@ -547,6 +626,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Commit or PR subject line to evaluate for breaking change",
     )
+    check_parser.add_argument(
+        "--target",
+        default=None,
+        metavar="TRIPLE",
+        help="rustc target triple to check platform-specific APIs for",
+    )
     return parser.parse_args(argv)
 
 
@@ -558,7 +643,11 @@ def main() -> int:
     try:
         if args.command == "packages":
             return cmd_packages()
-        return cmd_check(baseline_rev=args.baseline_rev, cli_subjects=args.subject)
+        return cmd_check(
+            baseline_rev=args.baseline_rev,
+            cli_subjects=args.subject,
+            target=args.target,
+        )
     except (
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
