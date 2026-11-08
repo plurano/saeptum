@@ -49,9 +49,9 @@ mutant-exclusions:
 	@python3 -B tools/check_mutant_exclusions.py --selftest
 	@python3 -B tools/check_mutant_exclusions.py
 
-# Inline Bandit suppressions: each `# nosec` names its rule ids and gives a
-# reason after `--`; the selftest verifies the planted reasonless comment is
-# refused.
+# Inline Bandit suppressions: each `# nosec` names its rule ids and gives its
+# reason after a second `#`, where Bandit does not read it; the selftest
+# verifies the planted reasonless comment and the `--` form are refused.
 nosec-reasons:
 	@python3 -B tools/check_nosec.py --selftest
 	@python3 -B tools/check_nosec.py

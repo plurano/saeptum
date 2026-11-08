@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess  # nosec B404 -- runs only git and cargo, fixed argv list, never a shell
+import subprocess  # nosec B404  # runs only git and cargo, fixed argv list, never a shell
 import sys
 
 BREAKING_PATTERN = re.compile(r"^[a-z]+(\([^)]*\))?!:")
@@ -38,7 +38,7 @@ TARGET_PATTERN = re.compile(r"[a-z0-9_]+(-[a-z0-9_.]+){1,3}")
 
 def _run_git(args: list[str], timeout: int) -> str:
     """`git` with `args`: no shell, deadline `timeout`; stdout, or CalledProcessError."""
-    done = subprocess.run(  # nosec B603 B607 -- fixed git argv, no shell, git found on PATH
+    done = subprocess.run(  # nosec B603 B607  # fixed git argv, no shell, git found on PATH
         ["git", *args],
         shell=False,
         capture_output=True,
@@ -53,7 +53,7 @@ def _run_cargo(
     args: list[str], timeout: int, capture: bool
 ) -> subprocess.CompletedProcess[str]:
     """`cargo` with `args`: no shell, deadline `timeout`; the exit code is the caller's to judge."""
-    return subprocess.run(  # nosec B603 B607 -- fixed cargo argv, no shell, cargo found on PATH
+    return subprocess.run(  # nosec B603 B607  # fixed cargo argv, no shell, cargo found on PATH
         ["cargo", *args],
         shell=False,
         capture_output=capture,

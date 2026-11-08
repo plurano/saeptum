@@ -8,12 +8,13 @@ Check:
     Ensures every # nosec suppression directive specifies rule IDs and a reason.
 
 Form:
-    # nosec Bxxx[ Bxxx] -- <reason>
+    # nosec Bxxx[ Bxxx]  # <reason>
 
 Why:
     Bandit and Prospector run in Codacy. An unexplained nosec hides a finding.
-    Bandit reads reason words as candidate test names, so a reason may widen
-    suppression to other rules if not carefully validated.
+    Bandit reads every word between nosec and the next # as a test id or name,
+    so a reason there (after -- or bare) can widen the suppression; a reason
+    after a second # is never read.
 
 Exit codes:
     0 = valid or none
@@ -26,7 +27,7 @@ from __future__ import annotations
 import argparse
 import io
 import re
-import subprocess  # nosec B404 -- runs only git, fixed argv list, never a shell
+import subprocess  # nosec B404  # runs only git, fixed argv list, never a shell
 import sys
 import tokenize
 from pathlib import Path
@@ -34,38 +35,43 @@ from pathlib import Path
 GIT_TIMEOUT_SECONDS = 60
 MAX_FILES = 5000
 DIRECTIVE_RE = re.compile(r"#\s*nosec", re.IGNORECASE)
-VALID_RE = re.compile(r"#\s*nosec(?:[ \t,]+B\d{3})+[ \t]+--[ \t]+\S")
+VALID_RE = re.compile(r"#\s*nosec(?:[ \t,]+B\d{3})+[ \t]+#[ \t]*\S")
+DASH_FORM_RE = re.compile(r"#\s*nosec(?:[ \t,]+B\d{3})+[ \t]+--")
 
-SELFTEST_ACCEPTED = (
-    "import subprocess  # nosec B404 -- runs only git",
-    "x = run()  # nosec B603 B607 -- fixed argv",
-    "x = run()  # nosec B404,B603 -- why",
-    "#nosec B603 -- why",
-)
-
-SELFTEST_REFUSED = (
-    "x = run()  # nosec B603",
-    "import subprocess  # nosec",
-    "x = run()  # nosec -- why",
-    "x = run()  # nosec B603 --",
-    "x = run()  # nosec B603 -- ",
-    "x = run()  # nosec b603 -- why",
-    "x = run()  # nosec: B603 -- why",
-    "x = run()  # NOSEC B603 -- why",
-    "x = run()  # nosecurity review",
-    "x = run()  # noqa: E501  # nosec B603",
-)
-
-SELFTEST_IGNORED = (
-    's = "# nosec"',
-    "x = 1  # nanosecond budget",
-    "x = 1  # no suppression here",
+SELFTEST_CASES: tuple[tuple[str, int, int, str], ...] = (
+    # accepted (1, 0, "")
+    ("import subprocess  # nosec B404  # runs only git", 1, 0, ""),
+    ("x = run()  # nosec B603 B607  # fixed argv", 1, 0, ""),
+    ("x = run()  # nosec B404,B603  # why", 1, 0, ""),
+    ("#nosec B603 #why", 1, 0, ""),
+    ("x = run()  # nosec B603  # reason may name eval now", 1, 0, ""),
+    # refused, needs (0, 1, "needs rule ids")
+    ("x = run()  # nosec B603", 0, 1, "needs rule ids"),
+    ("import subprocess  # nosec", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec  # why", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec B603  #", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec B603 fixed argv", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec B603 eval", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec b603  # why", 0, 1, "needs rule ids"),
+    ("x = run()  # nosec: B603  # why", 0, 1, "needs rule ids"),
+    ("x = run()  # NOSEC B603  # why", 0, 1, "needs rule ids"),
+    ("x = run()  # nosecurity review", 0, 1, "needs rule ids"),
+    ("x = run()  # noqa: E501  # nosec B603", 0, 1, "needs rule ids"),
+    # refused, dash (0, 1, "after --")
+    ("x = run()  # nosec B603 -- why", 0, 1, "after --"),
+    ("x = run()  # nosec B603 B607 -- fixed argv", 0, 1, "after --"),
+    ("import subprocess  # nosec B404 -- runs only git", 0, 1, "after --"),
+    # ignored (0, 0, "")
+    ('s = "# nosec"', 0, 0, ""),
+    ('s = "# nosec B603 -- why"', 0, 0, ""),
+    ("x = 1  # nanosecond budget", 0, 0, ""),
+    ("x = 1  # no suppression here", 0, 0, ""),
 )
 
 
 def tracked_python_files(root: Path) -> list[str]:
     """Return tracked Python files in root via git ls-files."""
-    proc = subprocess.run(  # nosec B603 B607 -- fixed git argv, no shell, git found on PATH
+    proc = subprocess.run(  # nosec B603 B607  # fixed git argv, no shell, git found on PATH
         ["git", "ls-files", "-z", "--", "*.py"],
         cwd=root,
         capture_output=True,
@@ -82,6 +88,20 @@ def tracked_python_files(root: Path) -> list[str]:
     return files
 
 
+def _classify_comment(name: str, line: int, comment: str) -> tuple[int, str | None]:
+    """Classify a comment matching DIRECTIVE_RE into (is_annotated, finding)."""
+    if VALID_RE.search(comment):
+        return 1, None
+    if DASH_FORM_RE.search(comment):
+        msg = (
+            f"{name}:{line}: nosec reason after -- is read as test names; "
+            "write # nosec Bxxx  # <reason>"
+        )
+        return 0, msg
+    msg = f"{name}:{line}: nosec needs rule ids and a reason: # nosec Bxxx  # <reason>"
+    return 0, msg
+
+
 def check_source(name: str, text: str) -> tuple[int, list[str]]:
     """Scan text for inline nosec comments, returning (annotated_count, findings)."""
     annotated = 0
@@ -90,13 +110,10 @@ def check_source(name: str, text: str) -> tuple[int, list[str]]:
         tokens = tokenize.generate_tokens(io.StringIO(text).readline)
         for tok_type, tok_str, start, _end, _line in tokens:
             if tok_type == tokenize.COMMENT and DIRECTIVE_RE.search(tok_str):
-                if VALID_RE.search(tok_str):
-                    annotated += 1
-                else:
-                    line = start[0]
-                    findings.append(
-                        f"{name}:{line}: nosec needs rule ids and a reason: # nosec Bxxx -- <reason>"
-                    )
+                ann, finding = _classify_comment(name, start[0], tok_str)
+                annotated += ann
+                if finding is not None:
+                    findings.append(finding)
     except (tokenize.TokenError, SyntaxError, IndentationError) as exc:
         raise ValueError(f"{name}: cannot tokenize: {exc}") from exc
     return annotated, findings
@@ -127,27 +144,18 @@ def scan(root: Path) -> tuple[int, list[str]]:
 def selftest() -> int:
     """Run in-memory test cases through check_source."""
     failures = 0
-    total = len(SELFTEST_ACCEPTED) + len(SELFTEST_REFUSED) + len(SELFTEST_IGNORED) + 2
+    total = len(SELFTEST_CASES) + 2
 
-    for case in SELFTEST_ACCEPTED:
-        ann, fnd = check_source("test", case)
-        if ann != 1 or len(fnd) != 0:
-            print(f"FAIL: {case}")
+    for source, exp_ann, exp_fnd, exp_sub in SELFTEST_CASES:
+        ann, fnd = check_source("test", source)
+        mismatch = ann != exp_ann or len(fnd) != exp_fnd
+        if not mismatch and exp_sub:
+            mismatch = any(exp_sub not in item for item in fnd)
+        if mismatch:
+            print(f"FAIL: {source}")
             failures += 1
 
-    for case in SELFTEST_REFUSED:
-        ann, fnd = check_source("test", case)
-        if ann != 0 or len(fnd) != 1:
-            print(f"FAIL: {case}")
-            failures += 1
-
-    for case in SELFTEST_IGNORED:
-        ann, fnd = check_source("test", case)
-        if ann != 0 or len(fnd) != 0:
-            print(f"FAIL: {case}")
-            failures += 1
-
-    two_line = "import subprocess  # nosec B404 -- valid\nx = run()  # nosec B603"
+    two_line = "import subprocess  # nosec B404  # valid\nx = run()  # nosec B603"
     ann, fnd = check_source("test", two_line)
     if ann != 1 or len(fnd) != 1 or ":2:" not in fnd[0]:
         print(f"FAIL: {two_line}")
