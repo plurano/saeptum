@@ -18,9 +18,9 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use saeptum_microvm::{Launch, LaunchOptions, MAX_POLLS, POLL, RunningVm};
+use saeptum_microvm::{LaunchOptions, MAX_POLLS, POLL, RunningVm};
 
-use common::{Fallible, admitted, scratch, spawn_lock, stand_in};
+use common::{Fallible, scratch, start};
 
 /// Writes the process id and every argument, then stays up until killed.
 const RECORDS_ARGUMENTS: &str =
@@ -31,27 +31,6 @@ const RECORD_BUDGET: Duration = Duration::from_secs(10);
 
 /// The arguments every launch passes before any switch.
 const FIXED_ARGUMENTS: usize = 5;
-
-/// Starts the admitted row under `run_dir` with `options` or, for `None`,
-/// with [`RunningVm::start`].
-fn start(
-    run_dir: &Path,
-    options: Option<LaunchOptions>,
-) -> Result<RunningVm, Box<dyn std::error::Error>> {
-    let _guard = spawn_lock()?;
-    let firecracker = stand_in(run_dir, RECORDS_ARGUMENTS)?;
-    let launch = Launch {
-        firecracker: &firecracker,
-        kernel: Path::new("/cache/vmlinux"),
-        initrd: Path::new("/cache/initramfs.cpio"),
-        run_dir,
-    };
-    let instance = admitted()?;
-    Ok(match options {
-        Some(options) => RunningVm::start_with(&launch, &instance, options)?,
-        None => RunningVm::start(&launch, &instance)?,
-    })
-}
 
 /// Waits for the stand-in's record and returns its process id and arguments.
 fn record(vm: &RunningVm) -> Result<(u32, Vec<String>), Box<dyn std::error::Error>> {
@@ -77,7 +56,7 @@ fn arguments(
     options: Option<LaunchOptions>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let dir = scratch(name)?;
-    let vm = start(&dir, options)?;
+    let vm = start(&dir, RECORDS_ARGUMENTS, options)?;
     let (_, arguments) = record(&vm)?;
     vm.stop()?;
     std::fs::remove_dir_all(dir)?;
@@ -100,7 +79,7 @@ fn the_boot_timer_adds_its_flag() -> Fallible {
 #[test]
 fn pid_names_the_started_process() -> Fallible {
     let dir = scratch("pid")?;
-    let vm = start(&dir, None)?;
+    let vm = start(&dir, RECORDS_ARGUMENTS, None)?;
     let (recorded, _) = record(&vm)?;
     assert_eq!(vm.pid(), recorded);
     assert!(Path::new(&format!("/proc/{}", vm.pid())).exists());

@@ -9,7 +9,8 @@
 //! Positive: an answer line is written and the guest's context identifier
 //! reaches the responder. Negative: a refusal, and an answer carrying its own
 //! newline, become one `ERROR` line; a request past its bound, one that is not
-//! UTF-8 and one cut short are refused. Boundary: a request of exactly its
+//! UTF-8 and one cut short naming its byte count are refused. Boundary: an
+//! empty request closed at once names zero bytes, and a request of exactly its
 //! bound is answered.
 
 mod common;
@@ -85,6 +86,21 @@ fn a_malformed_request_is_refused() {
     }
 }
 
+/// Negative: a request cut short by the host closing the stream names how
+/// many bytes arrived.
+#[test]
+fn a_cut_short_request_names_its_byte_count() {
+    let outcome = written(b"cut", 16, &mut shout);
+    assert!(
+        matches!(
+            &outcome,
+            Err(MicroVmError::Protocol(text))
+                if text == "the host closed the stream after 3 bytes of its request"
+        ),
+        "{outcome:?}"
+    );
+}
+
 /// Negative: binding on an already-occupied vsock port is refused.
 #[test]
 fn an_occupied_or_inadmissible_vsock_port_is_refused() {
@@ -107,6 +123,20 @@ fn an_occupied_or_inadmissible_vsock_port_is_refused() {
 }
 
 // --- Boundary -------------------------------------------------------------
+
+/// Boundary: an empty request closed before any byte arrived names 0 bytes.
+#[test]
+fn an_empty_request_closed_at_once_names_zero_bytes() {
+    let outcome = written(b"", 16, &mut shout);
+    assert!(
+        matches!(
+            &outcome,
+            Err(MicroVmError::Protocol(text))
+                if text == "the host closed the stream after 0 bytes of its request"
+        ),
+        "{outcome:?}"
+    );
+}
 
 /// Boundary: a request of exactly its bound, newline included, is answered.
 #[test]
