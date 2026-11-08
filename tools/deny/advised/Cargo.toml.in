@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+
+# The planted case of `make advisories`: smallvec 1.6.0 (vulnerability
+# RUSTSEC-2021-0003, direct); colored 1.9.3 pulls atty 0.2.14, transitive, so
+# `all` and not `workspace` reaches it (unsound RUSTSEC-2021-0145, unmaintained
+# RUSTSEC-2024-0375); scopeguard locked at the yanked 0.3.0 by
+# `cargo update -p scopeguard --precise 0.3.0`. The advisory check has to report
+# each one; the .in suffix keeps the forge dependency graph and Renovate from
+# reading it, and nothing builds or ships this crate.
+[package]
+name = "saeptum-planted-advisory"
+version = "0.0.0"
+edition = "2024"
+license = "EUPL-1.2"
+publish = false
+
+[dependencies]
+smallvec = "=1.6.0"
+colored = "=1.9.3"
+scopeguard = "0.3"
+
+# A workspace of its own, so the repository's workspace does not claim it.
+[workspace]
