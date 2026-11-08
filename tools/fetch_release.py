@@ -30,24 +30,45 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
-TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
-ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*")
+TAG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*")
+ASSET_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 CHUNK_SIZE = 64 * 1024
 Runner = Callable[[list[str], int], int]
 ArgvBuilder = Callable[[str, str, str, str], list[str]]
 
 
-def default_runner(argv: list[str], timeout: int) -> int:
-    """Execute command with timeout, returning returncode."""
-    proc = subprocess.run(  # nosec B603  # fixed curl or gh argv, no shell, found on PATH
-        argv,
+def _run_curl(args: list[str], timeout: int) -> int:
+    """Execute curl with arguments and timeout, returning returncode."""
+    proc = subprocess.run(  # nosec B603 B607  # fixed curl argv, no shell, curl found on PATH
+        ["curl", *args],
+        shell=False,
         check=False,
         timeout=timeout,
     )
     return proc.returncode
+
+
+def _run_gh(args: list[str], timeout: int) -> int:
+    """Execute gh with arguments and timeout, returning returncode."""
+    proc = subprocess.run(  # nosec B603 B607  # fixed gh argv, no shell, gh found on PATH
+        ["gh", *args],
+        shell=False,
+        check=False,
+        timeout=timeout,
+    )
+    return proc.returncode
+
+
+def default_runner(argv: list[str], timeout: int) -> int:
+    """Execute command with timeout after verifying program is curl or gh."""
+    if argv[:1] == ["curl"]:
+        return _run_curl(argv[1:], timeout)
+    if argv[:1] == ["gh"]:
+        return _run_gh(argv[1:], timeout)
+    raise ValueError(f"refusing to run {argv[:1]!r}: only curl and gh run here")
 
 
 def _web_route_argv(repo: str, tag: str, asset: str, out: str) -> list[str]:
@@ -115,13 +136,13 @@ def compute_sha256(path: Path) -> str:
 
 def validate_arguments(repo: str, tag: str, asset: str, sha256: str) -> tuple[int, str]:
     """Validate arguments against allow-lists; return (rc, error_message)."""
-    if not REPO_RE.match(repo):
+    if not REPO_RE.fullmatch(repo):
         return 2, f"error: invalid --repo: {repo}"
-    if not TAG_RE.match(tag):
+    if not TAG_RE.fullmatch(tag):
         return 2, f"error: invalid --tag: {tag}"
-    if not ASSET_RE.match(asset):
+    if not ASSET_RE.fullmatch(asset):
         return 2, f"error: invalid --asset: {asset}"
-    if not SHA256_RE.match(sha256):
+    if not SHA256_RE.fullmatch(sha256):
         return 2, f"error: invalid --sha256: {sha256}"
     return 0, ""
 
@@ -399,6 +420,38 @@ SELFTEST_CASES: tuple[SelftestCase, ...] = (
         expected_out_exists=False,
         asset="a b",
     ),
+    SelftestCase(
+        "bad argument repo trailing newline",
+        [],
+        expected_rc=2,
+        expected_calls=0,
+        expected_out_exists=False,
+        repo="owner/repo\n",
+    ),
+    SelftestCase(
+        "bad argument tag trailing newline",
+        [],
+        expected_rc=2,
+        expected_calls=0,
+        expected_out_exists=False,
+        tag="v1.0.0\n",
+    ),
+    SelftestCase(
+        "bad argument asset trailing newline",
+        [],
+        expected_rc=2,
+        expected_calls=0,
+        expected_out_exists=False,
+        asset="asset-1.0.0.tar.gz\n",
+    ),
+    SelftestCase(
+        "bad argument sha256 trailing newline",
+        [],
+        expected_rc=2,
+        expected_calls=0,
+        expected_out_exists=False,
+        sha256=_VALID_SHA256 + "\n",
+    ),
 )
 
 
@@ -470,6 +523,25 @@ def _run_single_case(case: SelftestCase, case_out: Path) -> bool:
     return True
 
 
+def _check_runner_refusal() -> bool:
+    """Verify default_runner refuses unapproved programs and empty argv."""
+    try:
+        default_runner(["sh", "-c", "true"], 5)
+    except ValueError:
+        pass
+    else:
+        return False
+
+    try:
+        default_runner([], 5)
+    except ValueError:
+        pass
+    else:
+        return False
+
+    return True
+
+
 def selftest() -> int:
     """Run in-memory selftest suite across all test cases."""
     failures = 0
@@ -481,9 +553,14 @@ def selftest() -> int:
                 print(f"FAIL: {case.name}")
                 failures += 1
 
+    if not _check_runner_refusal():
+        print("FAIL: default runner refuses a program other than curl and gh")
+        failures += 1
+
     if failures > 0:
         return 1
-    print(f"PASS: release fetch selftest ({len(SELFTEST_CASES)} cases)")
+    total_cases = len(SELFTEST_CASES) + 1
+    print(f"PASS: release fetch selftest ({total_cases} cases)")
     return 0
 
 
