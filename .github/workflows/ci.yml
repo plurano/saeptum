@@ -132,12 +132,27 @@ jobs:
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_nosec.py
 
+      # Pull-request workflows and ruleset required status checks must match in
+      # both directions so no job runs unrequired. Python only, so no Cargo
+      # workspace is needed.
+      - name: Selftest the required-check list
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_required_checks.py --selftest
+
+      - name: Refuse a pull-request job the ruleset does not require
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_required_checks.py
+
       - name: Selftest the release fetch
         if: github.event.pull_request.draft != true
         run: python3 -B tools/fetch_release.py --selftest
 
   # Like the test job, it fails a draft in its first step rather than skipping
   # it in the job condition: a skipped job reports success.
+  # macOS and Windows get no leg: saeptum-microvm builds only on Linux
+  # (AF_VSOCK through socket2), and the semver job's 'Refuse OS-conditional
+  # items' step fails once any other crate gains an OS-conditional item, so a
+  # mutant behaves the same on every host.
   mutants:
     name: Mutation testing (changed code)
     if: github.event_name == 'pull_request'
