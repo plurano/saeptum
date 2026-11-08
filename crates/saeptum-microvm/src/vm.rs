@@ -230,14 +230,8 @@ impl RunningVm {
         stream
             .write_all(format!("{request}\n").as_bytes())
             .map_err(|error| MicroVmError::io("sending a request", error))?;
-        let line = match read_line(&mut stream, max_answer_bytes, EXCHANGE_BUDGET, "the answer")? {
-            Ok(line) => line,
-            Err(Unframed::Closed(bytes)) => {
-                return Err(MicroVmError::Protocol(format!(
-                    "the guest closed the stream after {bytes} bytes of its answer"
-                )));
-            }
-        };
+        let line = read_line(&mut stream, max_answer_bytes, EXCHANGE_BUDGET, "the answer")?
+            .map_err(|unframed| unframed.into_protocol_error("the guest", "answer"))?;
         let body = line.trim_end_matches('\n');
         if let Some(reason) = body.strip_prefix("ERROR ") {
             return Err(MicroVmError::Refused(format!(

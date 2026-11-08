@@ -19,6 +19,7 @@ use saeptum_capsule::{
     FIRST_GUEST_CID, GuestMemoryMib, Label, MicroVmController, MicroVmInstance, MicroVmRequest,
     VmmIdentity,
 };
+use saeptum_microvm::{Launch, LaunchOptions, RunningVm};
 
 /// What every test in this suite returns.
 #[allow(unused_imports)]
@@ -100,4 +101,30 @@ pub fn stand_in(dir: &Path, body: &str) -> Result<PathBuf, std::io::Error> {
     fs::write(&path, format!("#!/bin/sh\n{body}\n"))?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
     Ok(path)
+}
+
+/// Starts the admitted row with a stand-in running `body` under `run_dir`,
+/// with `options` or, for `None`, with [`RunningVm::start`].
+///
+/// # Errors
+///
+/// Propagates the controller's refusals and process spawn failures.
+pub fn start(
+    run_dir: &Path,
+    body: &str,
+    options: Option<LaunchOptions>,
+) -> Result<RunningVm, Box<dyn std::error::Error>> {
+    let _guard = spawn_lock()?;
+    let firecracker = stand_in(run_dir, body)?;
+    let launch = Launch {
+        firecracker: &firecracker,
+        kernel: Path::new("/cache/vmlinux"),
+        initrd: Path::new("/cache/initramfs.cpio"),
+        run_dir,
+    };
+    let instance = admitted()?;
+    Ok(match options {
+        Some(options) => RunningVm::start_with(&launch, &instance, options)?,
+        None => RunningVm::start(&launch, &instance)?,
+    })
 }

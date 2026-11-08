@@ -26,7 +26,7 @@ use std::time::Duration;
 use socket2::{Domain, SockAddr, Socket, Type};
 
 use crate::error::MicroVmError;
-use crate::line::{Unframed, read_line, timed_out};
+use crate::line::{read_line, timed_out};
 
 mod boot;
 
@@ -180,19 +180,13 @@ pub fn answer<In: Read, Out: Write, R: Responder>(
     max_request_bytes: usize,
     responder: &mut R,
 ) -> Result<(), MicroVmError> {
-    let line = match read_line(
+    let line = read_line(
         reader,
         max_request_bytes,
         GUEST_EXCHANGE_BUDGET,
         "the request",
-    )? {
-        Ok(line) => line,
-        Err(Unframed::Closed(bytes)) => {
-            return Err(MicroVmError::Protocol(format!(
-                "the host closed the stream after {bytes} bytes of its request"
-            )));
-        }
-    };
+    )?
+    .map_err(|unframed| unframed.into_protocol_error("the host", "request"))?;
     let reply = match responder.respond(line.trim_end_matches('\n'), cid) {
         Ok(body) if body.contains('\n') => {
             "ERROR the answer carried a newline of its own\n".to_owned()

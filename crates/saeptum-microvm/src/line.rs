@@ -50,6 +50,19 @@ pub enum Unframed {
     Closed(usize),
 }
 
+impl Unframed {
+    /// The protocol failure for a stream `peer` closed before the newline of
+    /// its `message`, naming how many bytes had arrived.
+    #[must_use]
+    pub(crate) fn into_protocol_error(self, peer: &str, message: &str) -> MicroVmError {
+        match self {
+            Self::Closed(bytes) => MicroVmError::Protocol(format!(
+                "{peer} closed the stream after {bytes} bytes of its {message}"
+            )),
+        }
+    }
+}
+
 /// Reads one newline-terminated line of at most `bound` bytes within `budget`.
 ///
 /// Returns `Ok(Err(Unframed::Closed(n)))` when the peer closed first, which a
@@ -106,5 +119,40 @@ pub const fn deadline_error(what: &'static str, budget: Duration) -> MicroVmErro
     MicroVmError::Deadline {
         what,
         millis: budget.as_millis(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Closed streams turned into protocol errors naming the peer and message.
+
+    use super::Unframed;
+    use crate::error::MicroVmError;
+
+    /// Boundary: a close before the first byte and one after the largest
+    /// count both name the peer, the byte count and the message.
+    #[test]
+    fn a_close_at_either_count_edge_is_a_protocol_error() {
+        let empty = Unframed::Closed(0).into_protocol_error("the host", "request");
+        assert!(
+            matches!(
+                empty,
+                MicroVmError::Protocol(ref text)
+                    if text == "the host closed the stream after 0 bytes of its request"
+            ),
+            "{empty:?}"
+        );
+        let max = Unframed::Closed(usize::MAX).into_protocol_error("the guest", "answer");
+        let expected = format!(
+            "the guest closed the stream after {} bytes of its answer",
+            usize::MAX
+        );
+        assert!(
+            matches!(
+                max,
+                MicroVmError::Protocol(ref text) if text == &expected
+            ),
+            "{max:?}"
+        );
     }
 }
