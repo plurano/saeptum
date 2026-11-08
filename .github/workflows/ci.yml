@@ -16,8 +16,9 @@ permissions:
   contents: read
 
 env:
-  # cargo-deny runs the licence allow-list of deny.toml. The digest is the one
-  # its release page publishes for the Linux archive of this version.
+  # cargo-deny runs the licence allow-list of deny.toml and the advisories
+  # check. The digest is the one its release page publishes for the Linux
+  # archive of this version.
   CARGO_DENY_VERSION: "0.20.2"
   CARGO_DENY_SHA256_LINUX: "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
   # cargo-mutants tests the tests: it changes the code a pull request
@@ -120,6 +121,12 @@ jobs:
       - name: Licence check
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: make licences
+
+      # The RustSec advisories over the locked graph, then the planted crate
+      # under tools/deny/advised, which the check has to report.
+      - name: Advisory check
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
+        run: make advisories
 
       # Codacy runs Bandit and Prospector, which accept a nosec with no
       # reason or with one Bandit reads as test names; these steps refuse

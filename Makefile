@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions nosec-reasons fetch-release semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons fetch-release semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions nosec-reasons fetch-release semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons fetch-release semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -41,6 +41,30 @@ licences:
 		|| { printf 'FAIL: the planted licence was not refused: cargo-deny exited %s, not 4\n' \
 		"$$status" >&2; exit 1; }
 	@printf '%s\n' 'PASS: the planted licence is refused.'
+
+# The RustSec advisories over the locked graph. The planted case: the crate
+# under tools/deny/advised locks smallvec 1.6.0, which RUSTSEC-2021-0003 names.
+# Its manifest and lock file carry an .in suffix, so the forge dependency graph
+# and Renovate never read them; the check copies them to a scratch directory.
+# cargo-deny exits 1 when an advisory check fails and also on an error of its
+# own, so the planted case passes only on status 1 with the advisory id in the
+# output.
+advisories:
+	$(CARGO_DENY) --version
+	$(CARGO_DENY) --locked --config $(CURDIR)/deny.toml check advisories
+	@dir=$$(mktemp -d) || exit 1; trap 'rm -rf "$$dir"' EXIT; \
+		mkdir "$$dir/src" \
+		&& cp tools/deny/advised/Cargo.toml.in "$$dir/Cargo.toml" \
+		&& cp tools/deny/advised/Cargo.lock.in "$$dir/Cargo.lock" \
+		&& cp tools/deny/advised/src/lib.rs "$$dir/src/lib.rs" || exit 1; \
+		status=0; $(CARGO_DENY) --manifest-path "$$dir/Cargo.toml" \
+		--locked --config $(CURDIR)/deny.toml check advisories \
+		>"$$dir/out.txt" 2>&1 || status=$$?; \
+		found='not found'; grep -q 'RUSTSEC-2021-0003' "$$dir/out.txt" && found=found; \
+		test "$$status" -eq 1 && test "$$found" = found \
+		|| { cat "$$dir/out.txt" >&2; printf 'FAIL: the planted advisory was not reported: cargo-deny exited %s, RUSTSEC-2021-0003 %s\n' \
+		"$$status" "$$found" >&2; exit 1; }
+	@printf '%s\n' 'PASS: the planted advisory is reported.'
 
 # Mutant-exclusion metadata: every exclude_re entry in .cargo/mutants.toml
 # carries category, entered and expires; the selftest verifies the planted

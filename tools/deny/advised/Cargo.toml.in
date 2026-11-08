@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+
+# The planted case of `make advisories`: a crate that locks smallvec 1.6.0,
+# which RUSTSEC-2021-0003 names. The advisory check has to report it; the .in
+# suffix keeps the forge dependency graph and Renovate from reading it, and
+# nothing builds or ships this crate.
+[package]
+name = "saeptum-planted-advisory"
+version = "0.0.0"
+edition = "2024"
+license = "EUPL-1.2"
+publish = false
+
+[dependencies]
+smallvec = "=1.6.0"
+
+# A workspace of its own, so the repository's workspace does not claim it.
+[workspace]

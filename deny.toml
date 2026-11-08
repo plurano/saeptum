@@ -16,3 +16,17 @@ allow = [
     # unicode-ident, a build-time crate, carries the Unicode tables under it.
     "Unicode-3.0",
 ]
+
+# The RustSec advisories over the locked graph, build-time crates included.
+# `make advisories` runs cargo-deny on it. A vulnerability, an unmaintained or
+# unsound crate anywhere in the graph, or a yanked version stops the gate; the
+# levels are set here because cargo-deny's defaults let a transitive unsound
+# crate and a yanked version pass. An ignored advisory is an entry in this list
+# with its reason, a decision taken in this file, and an entry the graph no
+# longer needs stops the gate too.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+unused-ignored-advisory = "deny"
+ignore = []
