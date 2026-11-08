@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Determine package scope and breaking status for cargo-semver-checks.
 
-Inspects the cargo workspace metadata to select published library crates while
-excluding internal test plumbing crates (such as test-support) that other
-workspace members only depend on as dev-dependencies.
+Inspects cargo workspace metadata to select library crates, excluding
+crates marked with `[package.metadata.saeptum] public-api = false`.
 
 Evaluates git commit subjects or PR title for breaking change markers:
 `^[a-z]+(\\([^)]*\\))?!:`.
@@ -61,22 +60,22 @@ def _run_cargo(
     )
 
 
+def _program_name(cmd: object) -> str:
+    """Extract program name from a command list, tuple, or string."""
+    if isinstance(cmd, (list, tuple)):
+        return str(cmd[0]) if cmd else "command"
+    parts = str(cmd).split()
+    return parts[0] if parts else "command"
+
+
 def describe_failure(exc: BaseException) -> str:
     """The `FAIL:` text for a failed command, a missed deadline or a refusal."""
     if isinstance(exc, subprocess.CalledProcessError):
-        cmd0 = (
-            exc.cmd[0]
-            if isinstance(exc.cmd, (list, tuple))
-            else str(exc.cmd).split()[0]
-        )
+        cmd0 = _program_name(exc.cmd)
         detail = (exc.stderr or "").strip()
         return f"{cmd0} exited {exc.returncode}: {detail}"
     if isinstance(exc, subprocess.TimeoutExpired):
-        cmd0 = (
-            exc.cmd[0]
-            if isinstance(exc.cmd, (list, tuple))
-            else str(exc.cmd).split()[0]
-        )
+        cmd0 = _program_name(exc.cmd)
         return f"{cmd0} exceeded its {exc.timeout} s deadline"
     return str(exc)
 
@@ -87,7 +86,7 @@ def is_breaking(subject: str) -> bool:
 
 
 def select_packages(metadata: dict) -> list[str]:
-    """Select workspace library packages, excluding dev-only test plumbing."""
+    """Select workspace library packages, excluding those marked public-api = false."""
     all_pkgs = metadata.get("packages", [])
     workspace_members = metadata.get("workspace_members")
     if workspace_members is not None:
@@ -100,27 +99,28 @@ def select_packages(metadata: dict) -> list[str]:
     else:
         pkgs = list(all_pkgs)
 
-    lib_pkgs: list[dict] = []
-    for pkg in pkgs:
-        targets = pkg.get("targets", [])
-        if any("lib" in t.get("kind", []) for t in targets):
-            lib_pkgs.append(pkg)
-
-    pkg_names = {p["name"] for p in lib_pkgs}
-    dep_kinds: dict[str, list[str | None]] = {name: [] for name in pkg_names}
-    for pkg in pkgs:
-        for dep in pkg.get("dependencies", []):
-            dep_name = dep.get("name")
-            if dep_name in dep_kinds and dep_name != pkg.get("name"):
-                dep_kinds[dep_name].append(dep.get("kind"))
-
     selected: list[str] = []
-    for name in sorted(pkg_names):
-        kinds = dep_kinds[name]
-        if kinds and all(k == "dev" for k in kinds):
+    for pkg in pkgs:
+        name = pkg.get("name", "")
+        targets = pkg.get("targets", [])
+        if not any("lib" in t.get("kind", []) for t in targets):
             continue
+
+        pkg_meta = pkg.get("metadata")
+        if isinstance(pkg_meta, dict):
+            saeptum_meta = pkg_meta.get("saeptum")
+            if isinstance(saeptum_meta, dict) and "public-api" in saeptum_meta:
+                val = saeptum_meta["public-api"]
+                if val is False:
+                    continue
+                if val is not True:
+                    raise ValueError(
+                        f"package {name!r}: invalid saeptum.public-api value {val!r}"
+                    )
+
         selected.append(name)
-    return selected
+
+    return sorted(selected)
 
 
 def check_revision(raw: str) -> str:
@@ -135,10 +135,21 @@ def check_revision(raw: str) -> str:
 def resolve_revision(raw: str, timeout: int = 60) -> str:
     """Resolve raw revision to a verified commit ID."""
     check_revision(raw)
-    out = _run_git(
-        ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{raw}^{{commit}}"],
-        timeout=timeout,
-    ).strip()
+    try:
+        out = _run_git(
+            [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                f"{raw}^{{commit}}",
+            ],
+            timeout=timeout,
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(
+            f"baseline revision {raw!r} names no commit in this repository"
+        ) from exc
     if not COMMIT_ID_PATTERN.fullmatch(out):
         raise ValueError(f"resolved revision {out!r} is not a valid commit id")
     return out
@@ -243,41 +254,74 @@ def cmd_check(
     return proc.returncode
 
 
-def _package(name: str, kind: str, deps: list[tuple[str, str | None]]) -> dict:
+def _package(
+    name: str,
+    kind: str,
+    deps: list[tuple[str, str | None]] | None = None,
+    metadata: dict | None = None,
+) -> dict:
     """One package entry shaped like `cargo metadata` output."""
-    return {
+    pkg: dict = {
         "name": name,
         "id": name,
         "targets": [{"kind": [kind]}],
-        "dependencies": [{"name": dep, "kind": dep_kind} for dep, dep_kind in deps],
+        "dependencies": [
+            {"name": dep, "kind": dep_kind} for dep, dep_kind in (deps or [])
+        ],
     }
+    if metadata is not None:
+        pkg["metadata"] = metadata
+    return pkg
 
 
-def _fixture(t_kind_from_b: str | None) -> dict:
-    """Lib A (normal dependency of B), lib B, lib T (dev dependency of A, and
-    of B with `t_kind_from_b`), bin-only C."""
+def _fixture(t_meta: dict | None = None) -> dict:
+    """Lib A, lib B (dev-depends on T), lib T (dev-only user, metadata t_meta), bin C."""
     return {
         "workspace_members": ["A", "B", "T", "C"],
         "packages": [
-            _package("A", "lib", [("T", "dev")]),
-            _package("B", "lib", [("A", None), ("T", t_kind_from_b)]),
-            _package("T", "lib", []),
-            _package("C", "bin", []),
+            _package("A", "lib"),
+            _package("B", "lib", [("A", None), ("T", "dev")]),
+            _package("T", "lib", metadata=t_meta),
+            _package("C", "bin"),
         ],
     }
 
 
 def _selection_failures() -> list[str]:
-    """Cases (a) and (b): the package selection rule."""
+    """Cases (a) and (b): the package selection and metadata opt-out rules."""
     failures = []
     cases = [
-        ("(a) T only a dev dependency", _fixture("dev"), ["A", "B"]),
-        ("(b) T a normal dependency of B", _fixture(None), ["A", "B", "T"]),
+        (
+            "(a) package with public-api = false excluded",
+            _fixture({"saeptum": {"public-api": False}}),
+            ["A", "B"],
+        ),
+        (
+            "(b) same package with no metadata included (dev-only users, no opt-out)",
+            _fixture(None),
+            ["A", "B", "T"],
+        ),
+        (
+            "(b) public-api = true allowed",
+            _fixture({"saeptum": {"public-api": True}}),
+            ["A", "B", "T"],
+        ),
     ]
     for label, metadata, expected in cases:
         got = select_packages(metadata)
         if got != expected:
             failures.append(f"{label}: expected {expected}, got {got}")
+
+    try:
+        select_packages(_fixture({"saeptum": {"public-api": "no"}}))
+        failures.append("(b) public-api = 'no' did not raise ValueError")
+    except ValueError as exc:
+        msg = str(exc)
+        if "T" not in msg or "'no'" not in msg:
+            failures.append(
+                f"(b) ValueError did not name package 'T' and value 'no': {msg!r}"
+            )
+
     return failures
 
 
@@ -430,9 +474,34 @@ def _unknown_revision_failures() -> list[str]:
     """Case (i): fail closed on an unknown revision."""
     try:
         resolve_revision("0" * 40)
-    except (subprocess.CalledProcessError, ValueError):
-        return []
+    except ValueError as exc:
+        if "names no commit" in str(exc):
+            return []
+        return [
+            f"(i) resolve_revision('0'*40) raised ValueError without 'names no commit': {exc}"
+        ]
+    except subprocess.CalledProcessError as exc:
+        return [
+            f"(i) resolve_revision('0'*40) raised CalledProcessError instead of ValueError: {exc}"
+        ]
     return ["(i) resolve_revision('0'*40) succeeded unexpectedly"]
+
+
+def _subcommand_failures() -> list[str]:
+    """Case (j): selftest subcommand and check --subject=--selftest argument parsing."""
+    failures = []
+    args_check = _parse_args(["check", "--baseline-rev", "a", "--subject=--selftest"])
+    if args_check.command != "check" or args_check.subject != ["--selftest"]:
+        failures.append(
+            f"(j) check subcommand mismatch: got command={args_check.command!r}, subject={args_check.subject!r}"
+        )
+
+    args_selftest = _parse_args(["selftest"])
+    if args_selftest.command != "selftest":
+        failures.append(
+            f"(j) selftest subcommand mismatch: got command={args_selftest.command!r}"
+        )
+    return failures
 
 
 def selftest() -> bool:
@@ -446,6 +515,7 @@ def selftest() -> bool:
         + _argv_failures()
         + _failure_text_failures()
         + _unknown_revision_failures()
+        + _subcommand_failures()
     )
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
@@ -457,13 +527,14 @@ def selftest() -> bool:
     return True
 
 
-def _parse_args() -> argparse.Namespace:
-    """The command line: `packages`, or `check --baseline-rev REV [--subject TEXT]...`."""
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The command line: `packages`, `selftest`, or `check --baseline-rev REV [--subject TEXT]...`."""
     parser = argparse.ArgumentParser(
         description="Filter and check public Rust API semver scope."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("packages", help="List library packages in scope")
+    subparsers.add_parser("selftest", help="Run self-tests")
     check_parser = subparsers.add_parser("check", help="Run cargo semver-checks")
     check_parser.add_argument(
         "--baseline-rev",
@@ -476,14 +547,14 @@ def _parse_args() -> argparse.Namespace:
         default=[],
         help="Commit or PR subject line to evaluate for breaking change",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
-    if "--selftest" in sys.argv:
+    args = _parse_args()
+    if args.command == "selftest":
         return 0 if selftest() else 1
 
-    args = _parse_args()
     try:
         if args.command == "packages":
             return cmd_packages()

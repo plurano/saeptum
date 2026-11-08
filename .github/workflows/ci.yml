@@ -3,7 +3,10 @@ name: CI
 
 'on':
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # Title (the squash subject, read by the semver job) or base edits rerun
+    # every job; jobs take seconds and none is skipped on edited, since a
+    # skipped required check would report success over an earlier failure.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: ['main']
   merge_group:
@@ -215,7 +218,7 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Selftest the package selection
-        run: python3 -B tools/semver_scope.py --selftest
+        run: python3 -B tools/semver_scope.py selftest
 
       # The title is read from the environment, never interpolated into the
       # script.
@@ -225,4 +228,4 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           cargo semver-checks --version
-          python3 -B tools/semver_scope.py check --baseline-rev "$BASE_SHA" --subject "$PR_TITLE"
+          python3 -B tools/semver_scope.py check --baseline-rev "$BASE_SHA" --subject="$PR_TITLE"

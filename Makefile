@@ -54,6 +54,6 @@ mutant-exclusions:
 # selftest verifies the package selection and the subject rule first.
 SEMVER_BASE ?= $(shell git merge-base origin/main HEAD 2>/dev/null)
 semver-scope:
-	@python3 -B tools/semver_scope.py --selftest
+	@python3 -B tools/semver_scope.py selftest
 	@test -n "$(SEMVER_BASE)" || { printf '%s\n' 'FAIL: no merge base with origin/main' >&2; exit 1; }
 	@python3 -B tools/semver_scope.py check --baseline-rev $(SEMVER_BASE)

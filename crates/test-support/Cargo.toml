@@ -15,5 +15,10 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# Test plumbing for this workspace only; nothing outside it depends on the
+# crate, so the public API gate (tools/semver_scope.py) leaves it out.
+[package.metadata.saeptum]
+public-api = false
+
 [lints]
 workspace = true
