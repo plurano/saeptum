@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons fetch-release semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons fetch-release semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -96,6 +96,15 @@ mutant-exclusions:
 nosec-reasons:
 	@python3 -B tools/check_nosec.py --selftest
 	@python3 -B tools/check_nosec.py
+
+# Pull-request required status checks: every job in a pull-request workflow
+# must be required by branch protection in .github/rulesets/main.json or listed
+# in EXEMPT, and every required check must name such a job. This prevents jobs
+# from running unrequired or deadlocking on non-existent jobs; the selftest
+# exercises parser rules, job shapes, and exempt handling.
+required-checks:
+	@python3 -B tools/check_required_checks.py --selftest
+	@python3 -B tools/check_required_checks.py
 
 # Pinned release asset fetching: tries the release download route then falls
 # back to the API asset route; the selftest verifies fallback and digests.
