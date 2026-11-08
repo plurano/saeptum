@@ -18,6 +18,7 @@ before execution.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import re
 import subprocess  # nosec B404  # runs only git and cargo, fixed argv list, never a shell
@@ -521,57 +522,42 @@ def _subcommand_failures() -> list[str]:
     return failures
 
 
+_SELFTEST_TARGETS = ("aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu")
+_SELFTEST_REFUSED_TARGETS = (
+    "--x",
+    "a;b",
+    "",
+    "x86_64",
+    "X86_64-unknown-linux-gnu",
+    "a-" + "b" * 70,
+)
+
+
+def _target_accepted_failure(cid: str, target: str) -> str | None:
+    """Case (k) helper: check that valid target is accepted and placed in argv."""
+    try:
+        argv, _, _ = build_check_argv(cid, ["a"], [], target)
+    except ValueError as exc:
+        return f"(k) build_check_argv refused valid target {target!r}: {exc}"
+    if ("--target", target) not in itertools.pairwise(argv):
+        return f"(k) build_check_argv '--target' not followed by {target!r}"
+    return None
+
+
 def _target_failures() -> list[str]:
     """Case (k): target triple validation and argv generation."""
     failures = []
     cid = "a" * 40
-    try:
-        argv_aarch64, _, _ = build_check_argv(
-            cid, ["a"], [], "aarch64-unknown-linux-gnu"
-        )
-        if "--target" not in argv_aarch64:
-            failures.append("(k) build_check_argv did not include '--target'")
-        else:
-            idx = argv_aarch64.index("--target")
-            if (
-                idx + 1 >= len(argv_aarch64)
-                or argv_aarch64[idx + 1] != "aarch64-unknown-linux-gnu"
-            ):
-                failures.append(
-                    "(k) build_check_argv '--target' not followed by 'aarch64-unknown-linux-gnu'"
-                )
-    except ValueError as exc:
-        failures.append(
-            f"(k) build_check_argv refused valid target 'aarch64-unknown-linux-gnu': {exc}"
-        )
-
-    try:
-        argv_x86, _, _ = build_check_argv(cid, ["a"], [], "x86_64-unknown-linux-gnu")
-        if (
-            "--target" not in argv_x86
-            or argv_x86[argv_x86.index("--target") + 1] != "x86_64-unknown-linux-gnu"
-        ):
-            failures.append(
-                "(k) build_check_argv '--target' not followed by 'x86_64-unknown-linux-gnu'"
-            )
-    except ValueError as exc:
-        failures.append(
-            f"(k) build_check_argv refused valid target 'x86_64-unknown-linux-gnu': {exc}"
-        )
+    for target in _SELFTEST_TARGETS:
+        fail = _target_accepted_failure(cid, target)
+        if fail is not None:
+            failures.append(fail)
 
     argv_none, _, _ = build_check_argv(cid, ["a"], [], None)
     if "--target" in argv_none:
         failures.append("(k) build_check_argv included '--target' when target is None")
 
-    refusals = [
-        "--x",
-        "a;b",
-        "",
-        "x86_64",
-        "X86_64-unknown-linux-gnu",
-        "a-" + "b" * 70,
-    ]
-    for bad_target in refusals:
+    for bad_target in _SELFTEST_REFUSED_TARGETS:
         try:
             build_check_argv(cid, ["a"], [], bad_target)
             failures.append(
