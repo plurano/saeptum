@@ -64,17 +64,34 @@ class Job:
 
 def _strip_quotes(s: str) -> str:
     """Strip one pair of matching outer single or double quotes."""
-    if len(s) >= 2 and ((s[0] == "'" and s[-1] == "'") or (s[0] == '"' and s[-1] == '"')):
+    if len(s) >= 2 and (
+        (s[0] == "'" and s[-1] == "'") or (s[0] == '"' and s[-1] == '"')
+    ):
         return s[1:-1]
     return s
 
 
+def _is_empty_val(val: str) -> bool:
+    """Return True if inline value is empty or comment-only."""
+    s = val.strip()
+    return not s or s.startswith("#")
+
+
 def _check_block_indent(
-    filename: str, lineno: int, indent: int, child_indent: int, has_child: bool
+    filename: str, lineno: int, indent: int, child_indent: int, block_open: bool | None
 ) -> None:
     """Validate line indentation within a block."""
-    if indent in (1, 3) or indent < child_indent or (indent > child_indent and not has_child):
+    if indent in (1, 3) or indent < child_indent:
         raise ValueError(f"{filename}:{lineno}: invalid indentation ({indent} spaces)")
+    if indent > child_indent:
+        if block_open is None:
+            raise ValueError(
+                f"{filename}:{lineno}: invalid indentation ({indent} spaces)"
+            )
+        if not block_open:
+            raise ValueError(
+                f"{filename}:{lineno}: continuation line after an inline value"
+            )
 
 
 def _parse_quoted_name(s: str, q: str, filename: str, line_num: int) -> str:
@@ -92,7 +109,9 @@ def _parse_quoted_name(s: str, q: str, filename: str, line_num: int) -> str:
     if not inner:
         raise ValueError(f"{filename}:{line_num}: empty job name")
     if not QUOTED_NAME_RE.match(inner):
-        raise ValueError(f"{filename}:{line_num}: job name outside the allowed character set")
+        raise ValueError(
+            f"{filename}:{line_num}: job name outside the allowed character set"
+        )
     return inner
 
 
@@ -103,7 +122,9 @@ def _parse_plain_name(s: str, filename: str, line_num: int) -> str:
     if not s:
         raise ValueError(f"{filename}:{line_num}: empty job name")
     if not PLAIN_NAME_RE.match(s):
-        raise ValueError(f"{filename}:{line_num}: job name outside the allowed character set")
+        raise ValueError(
+            f"{filename}:{line_num}: job name outside the allowed character set"
+        )
     return s
 
 
@@ -138,10 +159,14 @@ def _parse_on_inline(filename: str, line_num: int, remainder: str) -> set[str]:
         for item in inner.split(",")[:MAX_LINES]:
             raw = item.strip()
             if not raw:
-                raise ValueError(f"{filename}:{line_num}: empty item in 'on:' flow list")
+                raise ValueError(
+                    f"{filename}:{line_num}: empty item in 'on:' flow list"
+                )
             tok = _strip_quotes(raw)
             if not TRIGGER_EVENT_RE.match(tok):
-                raise ValueError(f"{filename}:{line_num}: invalid trigger in 'on:' flow list")
+                raise ValueError(
+                    f"{filename}:{line_num}: invalid trigger in 'on:' flow list"
+                )
             triggers.add(tok)
         return triggers
     tok = _strip_quotes(rem)
@@ -155,7 +180,7 @@ def _parse_on_block(
 ) -> tuple[set[str], int]:
     """Parse block mapping form of 'on:' starting at start_idx."""
     triggers: set[str] = set()
-    has_trigger = False
+    block_open: bool | None = None
     idx = start_idx
     max_idx = min(len(lines), start_idx + MAX_LINES)
     for i in range(start_idx, max_idx):
@@ -167,7 +192,7 @@ def _parse_on_block(
         indent = len(line) - len(line.lstrip(" "))
         if indent == 0:
             break
-        _check_block_indent(filename, i + 1, indent, 2, has_trigger)
+        _check_block_indent(filename, i + 1, indent, 2, block_open)
         if indent == 2:
             m = TRIGGER_KEY_RE.match(line)
             if not m:
@@ -176,14 +201,12 @@ def _parse_on_block(
             if not TRIGGER_EVENT_RE.match(key):
                 raise ValueError(f"{filename}:{i + 1}: invalid trigger key in 'on:'")
             triggers.add(key)
-            has_trigger = True
+            block_open = _is_empty_val(m.group(2))
         idx = i + 1
     return triggers, idx
 
 
-def _parse_job_header(
-    line: str, filename: str, lineno: int, seen_ids: set[str]
-) -> str:
+def _parse_job_header(line: str, filename: str, lineno: int, seen_ids: set[str]) -> str:
     """Parse a 2-space job declaration line. Returns the job identifier."""
     stripped = line.strip()
     if stripped.startswith("<<:"):
@@ -203,8 +226,8 @@ def _parse_job_header(
 
 def _parse_job_attr_line(
     line: str, cur_id: str, filename: str, lineno: int, seen_attrs: set[str]
-) -> tuple[str | None, bool]:
-    """Parse a 4-space job attribute line. Returns (name, is_uses)."""
+) -> tuple[str | None, bool, bool]:
+    """Parse a 4-space job attribute line. Returns (name, is_uses, block_open)."""
     m = ATTR_RE.match(line)
     if not m:
         raise ValueError(f"{filename}:{lineno}: invalid job attribute syntax")
@@ -214,11 +237,12 @@ def _parse_job_attr_line(
     seen_attrs.add(key)
     if key == "strategy":
         raise ValueError(f"{filename}:{lineno}: job '{cur_id}' uses 'strategy:'")
+    is_empty = _is_empty_val(val)
     if key == "uses":
-        return None, True
+        return None, True, is_empty
     if key == "name":
-        return parse_job_name(val, filename, lineno), False
-    return None, False
+        return parse_job_name(val, filename, lineno), False, is_empty
+    return None, False, is_empty
 
 
 def _flush_job(
@@ -242,14 +266,16 @@ def _apply_job_attr(
     cur_attrs: set[str],
     cur_uses: bool,
     cur_name: str | None,
-) -> tuple[bool, str | None]:
-    """Parse and apply 4-space job attribute. Returns updated (cur_uses, cur_name)."""
+) -> tuple[bool, str | None, bool]:
+    """Parse and apply 4-space job attribute. Returns (cur_uses, cur_name, block_open)."""
     if cur_id is None:
         raise ValueError(f"{filename}:{lineno}: job attribute without job")
-    name, is_uses = _parse_job_attr_line(line, cur_id, filename, lineno, cur_attrs)
+    name, is_uses, block_open = _parse_job_attr_line(
+        line, cur_id, filename, lineno, cur_attrs
+    )
     updated_uses = cur_uses or is_uses
     updated_name = name if name is not None else cur_name
-    return updated_uses, updated_name
+    return updated_uses, updated_name, block_open
 
 
 def _parse_jobs_block(
@@ -261,6 +287,7 @@ def _parse_jobs_block(
     cur_id: str | None = None
     cur_line, cur_name, cur_uses = 0, None, False
     cur_attrs: set[str] = set()
+    block_open: bool | None = None
     idx = start_idx
     max_idx = min(len(lines), start_idx + MAX_LINES)
 
@@ -274,16 +301,17 @@ def _parse_jobs_block(
         if indent == 0:
             break
         if cur_id is None:
-            _check_block_indent(filename, i + 1, indent, 2, False)
+            _check_block_indent(filename, i + 1, indent, 2, None)
         elif indent != 2:
-            _check_block_indent(filename, i + 1, indent, 4, bool(cur_attrs))
+            _check_block_indent(filename, i + 1, indent, 4, block_open)
         if indent == 2:
             _flush_job(jobs, filename, cur_id, cur_line, cur_name, cur_uses)
             cur_id = _parse_job_header(line, filename, i + 1, seen_ids)
             cur_line, cur_name, cur_uses = i + 1, None, False
             cur_attrs = set()
+            block_open = None
         elif indent == 4:
-            cur_uses, cur_name = _apply_job_attr(
+            cur_uses, cur_name, block_open = _apply_job_attr(
                 line, cur_id, filename, i + 1, cur_attrs, cur_uses, cur_name
             )
         idx = i + 1
@@ -295,13 +323,17 @@ def _parse_jobs_block(
 def _validate_workflow_lines(filename: str, lines: list[str]) -> None:
     """Validate workflow line count, indentation characters, and document markers."""
     if len(lines) > MAX_LINES:
-        raise ValueError(f"{filename}:1: file exceeds maximum line limit of {MAX_LINES}")
+        raise ValueError(
+            f"{filename}:1: file exceeds maximum line limit of {MAX_LINES}"
+        )
     for i, line in enumerate(lines[:MAX_LINES], 1):
         leading = line[: len(line) - len(line.lstrip(" \t"))]
         if "\t" in leading:
             raise ValueError(f"{filename}:{i}: tab character in indentation")
         if i > 1 and line.strip() == "---":
-            raise ValueError(f"{filename}:{i}: document separator '---' after first line")
+            raise ValueError(
+                f"{filename}:{i}: document separator '---' after first line"
+            )
 
 
 def _parse_on_clause(
@@ -350,7 +382,9 @@ def parse_workflow(filename: str, text: str) -> list[Job]:
             raise ValueError(f"{filename}:{idx + 1}: invalid top-level YAML syntax")
         clean_key = m.group(1).strip("'\"")
         if clean_key in seen_top_keys:
-            raise ValueError(f"{filename}:{idx + 1}: repeated top-level key '{clean_key}'")
+            raise ValueError(
+                f"{filename}:{idx + 1}: repeated top-level key '{clean_key}'"
+            )
         seen_top_keys.add(clean_key)
 
         if clean_key == "on":
@@ -384,21 +418,29 @@ def parse_ruleset(data: dict[str, Any], filename: str) -> list[str]:
 
     params = matching[0].get("parameters")
     if not isinstance(params, dict):
-        raise TypeError(f"{filename}: missing 'parameters' object in required_status_checks rule")
+        raise TypeError(
+            f"{filename}: missing 'parameters' object in required_status_checks rule"
+        )
     checks = params.get("required_status_checks")
     if not isinstance(checks, list):
-        raise TypeError(f"{filename}: missing 'required_status_checks' list in rule parameters")
+        raise TypeError(
+            f"{filename}: missing 'required_status_checks' list in rule parameters"
+        )
 
     contexts: list[str] = []
     seen: set[str] = set()
     for item in checks[:MAX_LINES]:
         if not isinstance(item, dict):
-            raise TypeError(f"{filename}: required_status_checks entry must be an object")
+            raise TypeError(
+                f"{filename}: required_status_checks entry must be an object"
+            )
         ctx = item.get("context")
         if not isinstance(ctx, str) or not ctx.strip():
             raise ValueError(f"{filename}: required context must be a non-empty string")
         if ctx in seen:
-            raise ValueError(f"{filename}: duplicate required status check context '{ctx}'")
+            raise ValueError(
+                f"{filename}: duplicate required status check context '{ctx}'"
+            )
         seen.add(ctx)
         contexts.append(ctx)
     return contexts
@@ -524,13 +566,19 @@ def evaluate_required_checks(
         return 2, [str(exc)]
 
     findings: list[str] = []
-    findings.extend(_check_exemptions(exempt, required, all_jobs, exempt_file, exempt_line))
+    findings.extend(
+        _check_exemptions(exempt, required, all_jobs, exempt_file, exempt_line)
+    )
     findings.extend(_check_job_contexts(all_jobs, required, exempt))
-    findings.extend(_check_required_contexts(required, all_jobs, ruleset_file, ruleset_text))
+    findings.extend(
+        _check_required_contexts(required, all_jobs, ruleset_file, ruleset_text)
+    )
 
     if findings:
         return 1, findings
-    return 0, ["PASS: every pull-request job is a required check, and every required check names one."]
+    return 0, [
+        "PASS: every pull-request job is a required check, and every required check names one."
+    ]
 
 
 def find_exempt_line() -> int:
@@ -562,19 +610,28 @@ def _load_ruleset(path: Path) -> tuple[dict[str, Any] | None, str, str | None]:
     return data, text, None
 
 
-def _load_workflows(wf_dir: Path, root: Path) -> tuple[dict[str, str] | None, str | None]:
+def _load_workflows(
+    wf_dir: Path, root: Path
+) -> tuple[dict[str, str] | None, str | None]:
     """Read workflow files from directory. Returns (workflows_dict, error)."""
     if not wf_dir.is_dir():
         return None, f"{wf_dir}: directory not found"
     try:
         wf_paths = sorted(
-            [p for p in wf_dir.iterdir() if p.is_file() and p.suffix in (".yml", ".yaml")]
+            [
+                p
+                for p in wf_dir.iterdir()
+                if p.is_file() and p.suffix in (".yml", ".yaml")
+            ]
         )
     except OSError as exc:
         return None, f"{wf_dir}: cannot list directory: {exc}"
 
     if len(wf_paths) > MAX_WORKFLOWS:
-        return None, f"{wf_dir}: too many workflow files ({len(wf_paths)} > {MAX_WORKFLOWS})"
+        return (
+            None,
+            f"{wf_dir}: too many workflow files ({len(wf_paths)} > {MAX_WORKFLOWS})",
+        )
 
     workflows: dict[str, str] = {}
     for p in wf_paths[:MAX_WORKFLOWS]:
@@ -718,21 +775,27 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "name with trailing comment",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  build:\n    name: Build # comment\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  build:\n    name: Build # comment\n"
+        },
         _make_ruleset(["Build"]),
         0,
         "PASS:",
     ),
     (
         "workflow without pull_request skipped",
-        {"release.yml": "name: Release\non:\n  push:\n    tags: ['v*']\njobs:\n  pub:\n    name: Pub\n"},
+        {
+            "release.yml": "name: Release\non:\n  push:\n    tags: ['v*']\njobs:\n  pub:\n    name: Pub\n"
+        },
         _make_ruleset([]),
         0,
         "PASS:",
     ),
     (
         "on: [push, pull_request]",
-        {"ci.yml": "name: CI\non: [push, pull_request]\njobs:\n  test:\n    name: Test\n"},
+        {
+            "ci.yml": "name: CI\non: [push, pull_request]\njobs:\n  test:\n    name: Test\n"
+        },
         _make_ruleset(["Test"]),
         0,
         "PASS:",
@@ -769,11 +832,7 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "block-list on: -> 2",
-        {
-            "ci.yml": (
-                "name: CI\non:\n  - push\njobs:\n  test:\n    name: Test\n"
-            )
-        },
+        {"ci.yml": ("name: CI\non:\n  - push\njobs:\n  test:\n    name: Test\n")},
         _make_ruleset(["Test"]),
         2,
         "invalid trigger key in 'on:'",
@@ -791,11 +850,7 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "attribute line with dash item -> 2",
-        {
-            "ci.yml": (
-                "name: CI\non: pull_request\njobs:\n  build:\n    - item\n"
-            )
-        },
+        {"ci.yml": ("name: CI\non: pull_request\njobs:\n  build:\n    - item\n")},
         _make_ruleset(["Build"]),
         2,
         "invalid job attribute syntax",
@@ -824,14 +879,18 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "${{ name -> 2",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: ${{ matrix.name }}\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: ${{ matrix.name }}\n"
+        },
         _make_ruleset(["Test"]),
         2,
         "dynamic '${{...}}'",
     ),
     (
         "matrix -> 2",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    strategy:\n      matrix: [1]\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    strategy:\n      matrix: [1]\n"
+        },
         _make_ruleset(["test"]),
         2,
         "strategy:",
@@ -853,7 +912,12 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     (
         "two required_status_checks rules -> 2",
         {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: Test\n"},
-        {"rules": [{"type": "required_status_checks"}, {"type": "required_status_checks"}]},
+        {
+            "rules": [
+                {"type": "required_status_checks"},
+                {"type": "required_status_checks"},
+            ]
+        },
         2,
         "expected exactly 1 rule",
     ),
@@ -865,7 +929,10 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
                 {
                     "type": "required_status_checks",
                     "parameters": {
-                        "required_status_checks": [{"context": "Test"}, {"context": "Test"}]
+                        "required_status_checks": [
+                            {"context": "Test"},
+                            {"context": "Test"},
+                        ]
                     },
                 }
             ]
@@ -942,7 +1009,9 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "repeated top-level key -> 2",
-        {"ci.yml": "name: CI\non: pull_request\nname: Duplicate\njobs:\n  test:\n    name: Test\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\nname: Duplicate\njobs:\n  test:\n    name: Test\n"
+        },
         _make_ruleset(["Test"]),
         2,
         "repeated top-level key 'name'",
@@ -956,21 +1025,27 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "block scalar in name -> 2",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: >\n      Test\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: >\n      Test\n"
+        },
         _make_ruleset(["Test"]),
         2,
         "block scalar in job name",
     ),
     (
         "anchor in name -> 2",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: &anchor Test\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name: &anchor Test\n"
+        },
         _make_ruleset(["Test"]),
         2,
         "anchor/alias/tag in job name",
     ),
     (
         "empty name -> 2",
-        {"ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name:\n    runs-on: ubuntu\n"},
+        {
+            "ci.yml": "name: CI\non: pull_request\njobs:\n  test:\n    name:\n    runs-on: ubuntu\n"
+        },
         _make_ruleset(["Test"]),
         2,
         "empty job name",
@@ -1039,11 +1114,7 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
     ),
     (
         "name with comment only = empty -> 2",
-        {
-            "ci.yml": (
-                "name: CI\non: pull_request\njobs:\n  build:\n    name: #c\n"
-            )
-        },
+        {"ci.yml": ("name: CI\non: pull_request\njobs:\n  build:\n    name: #c\n")},
         _make_ruleset(["#c"]),
         2,
         "empty job name",
@@ -1166,7 +1237,7 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
         "quoted name with control character -> 2",
         {
             "ci.yml": (
-                "name: CI\non: pull_request\njobs:\n  build:\n    name: \"Build \x07\"\n"
+                'name: CI\non: pull_request\njobs:\n  build:\n    name: "Build \x07"\n'
             )
         },
         _make_ruleset(["Build"]),
@@ -1179,6 +1250,98 @@ SELFTEST_CASES: tuple[tuple[Any, ...], ...] = (
         None,
         2,
         ".github/rulesets/main.json: ruleset root must be a JSON object",
+    ),
+    (
+        "continuation line after name plain scalar -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: Build\n      Test\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "continuation line after an inline value",
+    ),
+    (
+        "continuation line after blank line -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: Build\n\n      Test\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "continuation line after an inline value",
+    ),
+    (
+        "continuation line after single-quoted name -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n    name: 'Build'\n      Test\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "continuation line after an inline value",
+    ),
+    (
+        "continuation line after push inline trigger -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non:\n  push: x\n    pull_request:\njobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "continuation line after an inline value",
+    ),
+    (
+        "continuation line after runs-on attribute -> 2",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n"
+                "    name: Build\n    runs-on: ubuntu-latest\n      extra\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        2,
+        "continuation line after an inline value",
+    ),
+    (
+        "empty inline env opens nested block -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n"
+                "    name: Build\n    env:\n      A: b\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "empty inline steps opens nested block before name -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non: pull_request\njobs:\n  build:\n"
+                "    steps:\n      - run: x\n    name: Build\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
+    ),
+    (
+        "comment-only trigger value opens nested block -> 0",
+        {
+            "ci.yml": (
+                "name: CI\non:\n  pull_request: # c\n    branches: [main]\n"
+                "jobs:\n  build:\n    name: Build\n"
+            )
+        },
+        _make_ruleset(["Build"]),
+        0,
+        "PASS:",
     ),
 )
 
