@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -41,6 +41,47 @@ licences:
 		|| { printf 'FAIL: the planted licence was not refused: cargo-deny exited %s, not 4\n' \
 		"$$status" >&2; exit 1; }
 	@printf '%s\n' 'PASS: the planted licence is refused.'
+
+# The RustSec advisories over the locked graph, then planted test cases.
+# The planted crate under tools/deny/advised exercises four levels: smallvec
+# 1.6.0 (vulnerability RUSTSEC-2021-0003, direct); colored 1.9.3 pulls atty
+# 0.2.14, transitive, so all and not workspace reaches it (unsound
+# RUSTSEC-2021-0145, unmaintained RUSTSEC-2024-0375); scopeguard 0.3.0 locked
+# at the yanked version. The unused-ignore case exercises
+# unused-ignored-advisory over the main graph by injecting an ignored advisory
+# it does not need. cargo-deny exits 1 on errors of its own as well as when
+# checks fail, and a weakened level still exits 1 through the other findings;
+# each finding must be read from the JSON output with severity error.
+advisories:
+	$(CARGO_DENY) --version
+	$(CARGO_DENY) --locked --config $(CURDIR)/deny.toml check advisories
+	@python3 -B tools/check_deny_output.py --selftest
+	@dir=$$(mktemp -d) || exit 1; trap 'rm -rf "$$dir"' EXIT; \
+		mkdir "$$dir/src" \
+		&& cp tools/deny/advised/Cargo.toml.in "$$dir/Cargo.toml" \
+		&& cp tools/deny/advised/Cargo.lock.in "$$dir/Cargo.lock" \
+		&& cp tools/deny/advised/src/lib.rs "$$dir/src/lib.rs" || exit 1; \
+		status=0; $(CARGO_DENY) --format json --manifest-path "$$dir/Cargo.toml" \
+		--locked --config $(CURDIR)/deny.toml check advisories \
+		>"$$dir/planted.json" 2>&1 || status=$$?; \
+		python3 -B tools/check_deny_output.py --status "$$status" \
+		--expect error:vulnerability:RUSTSEC-2021-0003 \
+		--expect error:unsound:RUSTSEC-2021-0145 \
+		--expect error:unmaintained:RUSTSEC-2024-0375 \
+		--expect error:yanked:scopeguard@0.3.0 "$$dir/planted.json" \
+		|| { cat "$$dir/planted.json" >&2; exit 1; }; \
+		sed 's/^ignore = \[\]$$/ignore = ["RUSTSEC-2021-0003"]/' deny.toml > "$$dir/ignored.toml" || exit 1; \
+		if cmp -s deny.toml "$$dir/ignored.toml"; then \
+			printf '%s\n' 'FAIL: deny.toml has no line ignore = [], the unused-ignore case cannot be planted' >&2; \
+			exit 1; \
+		fi; \
+		status=0; $(CARGO_DENY) --format json \
+		--locked --config "$$dir/ignored.toml" check advisories \
+		>"$$dir/ignored.json" 2>&1 || status=$$?; \
+		python3 -B tools/check_deny_output.py --status "$$status" \
+		--expect error:advisory-not-detected:- "$$dir/ignored.json" \
+		|| { cat "$$dir/ignored.json" >&2; exit 1; }
+	@printf '%s\n' 'PASS: every planted advisory level is reported.'
 
 # Mutant-exclusion metadata: every exclude_re entry in .cargo/mutants.toml
 # carries category, entered and expires; the selftest verifies the planted
