@@ -56,6 +56,12 @@
           },
           {
             "context": "Licence / REUSE lint"
+          },
+          {
+            "context": "Public API (cargo-semver-checks)"
+          },
+          {
+            "context": "Mutation testing (changed code)"
           }
         ],
         "strict_required_status_checks_policy": true
