@@ -9,8 +9,9 @@
 //! host half runs end to end over a real socket.
 //!
 //! Positive: a started row writes the controller's memory and context
-//! identifier into its configuration, one exchange round-trips, and stopping
-//! reaps the process and removes the socket. Negative: a guest `ERROR`
+//! identifier into its configuration, one exchange round-trips, a handshake
+//! closed before its acknowledgement is polled again, and stopping reaps the
+//! process and removes the socket. Negative: a guest `ERROR`
 //! answer, a guest stream closed before a newline, a request with a newline,
 //! a process that exits before its guest accepts, a missing binary and an
 //! occupied directory are each refused. Boundary: an answer of exactly its
@@ -21,40 +22,81 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 
 use saeptum_microvm::{
-    Launch, MAX_SOCKET_PATH_BYTES, MicroVmError, RunningVm, SOCKET_NAME, connect_command,
+    BOOT_BUDGET, EXCHANGE_BUDGET, Launch, MAX_SOCKET_PATH_BYTES, MicroVmError, RunningVm,
+    SOCKET_NAME, connect_command,
 };
 use serde_json::Value;
+use socket2::{Domain, SockAddr, Socket, Type};
 
 use common::{
     EXITS_AT_ONCE, FIRST_CID, FIRST_VM, Fallible, PORT, STAYS_UP, admitted, scratch, start,
 };
 
-/// Plays Firecracker's side: acknowledges one `CONNECT`, then answers the
-/// request line with `answer`. Returns what the guest was asked.
-fn fake_device(socket: &Path, answer: String) -> std::io::Result<JoinHandle<String>> {
-    let listener = UnixListener::bind(socket)?;
+/// What a fake device's thread hands back: the request line it was asked.
+type Served = JoinHandle<std::io::Result<String>>;
+
+/// Binds Firecracker's end of the hybrid vsock at `socket`. An accept on it
+/// waits at most [`BOOT_BUDGET`], as long as the host polls for its guest.
+fn device_listener(socket: &Path) -> std::io::Result<Socket> {
+    let listener = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    listener.bind(&SockAddr::unix(socket)?)?;
+    listener.listen(1)?;
+    listener.set_read_timeout(Some(BOOT_BUDGET))?;
+    Ok(listener)
+}
+
+/// Accepts one connection on `listener`; its reads and writes then wait at
+/// most [`EXCHANGE_BUDGET`].
+fn accept(listener: &Socket) -> std::io::Result<UnixStream> {
+    let (connection, _) = listener.accept()?;
+    connection.set_read_timeout(Some(EXCHANGE_BUDGET))?;
+    connection.set_write_timeout(Some(EXCHANGE_BUDGET))?;
+    Ok(UnixStream::from(connection))
+}
+
+/// Reads one line and checks that it is the host's `CONNECT` for [`PORT`].
+fn read_connect(reader: &mut impl BufRead) -> std::io::Result<()> {
+    let mut connect = String::new();
+    reader.read_line(&mut connect)?;
+    if connect == connect_command(PORT) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        ErrorKind::InvalidData,
+        format!("unexpected handshake {connect:?}"),
+    ))
+}
+
+/// Plays Firecracker's side for one connection: acknowledges its `CONNECT`,
+/// then answers the request line with `answer`.
+fn fake_device(socket: &Path, answer: String) -> std::io::Result<Served> {
+    fake_device_after_closes(socket, 0, answer)
+}
+
+/// Plays Firecracker while the guest is not listening yet: the first
+/// `closes` connections are closed after their `CONNECT`, before any
+/// acknowledgement, and the next one is served as by [`fake_device`].
+fn fake_device_after_closes(socket: &Path, closes: u8, answer: String) -> std::io::Result<Served> {
+    let listener = device_listener(socket)?;
     Ok(std::thread::spawn(move || {
-        let Ok((stream, _)) = listener.accept() else {
-            return String::new();
-        };
-        let mut reader = BufReader::new(&stream);
-        let mut connect = String::new();
-        let mut request = String::new();
-        let mut writer = &stream;
-        let _ = reader.read_line(&mut connect);
-        if connect != connect_command(PORT) {
-            return format!("unexpected handshake {connect:?}");
+        for _ in 0..closes {
+            read_connect(&mut BufReader::new(accept(&listener)?))?;
         }
-        let _ = writer.write_all(b"OK 1073741825\n");
-        let _ = reader.read_line(&mut request);
-        let _ = writer.write_all(answer.as_bytes());
-        request
+        let stream = accept(&listener)?;
+        let mut reader = BufReader::new(&stream);
+        let mut writer = &stream;
+        read_connect(&mut reader)?;
+        writer.write_all(b"OK 1073741825\n")?;
+        let mut request = String::new();
+        reader.read_line(&mut request)?;
+        writer.write_all(answer.as_bytes())?;
+        Ok(request)
     }))
 }
 
@@ -105,7 +147,7 @@ fn one_exchange_round_trips_and_stop_cleans_up() -> Fallible {
     let device = fake_device(vm.socket(), "verdict accepted\n".to_owned())?;
     let answer = vm.exchange(PORT, "evaluate candidate 7", 64)?;
     assert_eq!(answer, "verdict accepted");
-    let asked = device.join().map_err(|_| "the fake device panicked")?;
+    let asked = device.join().map_err(|_| "the fake device panicked")??;
     assert_eq!(asked, "evaluate candidate 7\n");
     let stopped = vm.stop()?;
     assert_eq!(stopped.sockets_removed, 1);
@@ -114,6 +156,21 @@ fn one_exchange_round_trips_and_stop_cleans_up() -> Fallible {
             .join(SOCKET_NAME)
             .exists()
     );
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+/// Positive: a handshake the device closes before its acknowledgement (the
+/// guest not listening yet) is polled again, not refused.
+#[test]
+fn a_handshake_closed_before_its_ack_is_retried() -> Fallible {
+    let dir = scratch("retry")?;
+    let mut vm = start(&dir, STAYS_UP, None)?;
+    let device = fake_device_after_closes(vm.socket(), 1, "verdict accepted\n".to_owned())?;
+    assert_eq!(vm.exchange(PORT, "evaluate", 64)?, "verdict accepted");
+    let asked = device.join().map_err(|_| "the fake device panicked")??;
+    assert_eq!(asked, "evaluate\n");
+    vm.stop()?;
     std::fs::remove_dir_all(dir)?;
     Ok(())
 }
@@ -276,9 +333,9 @@ fn dropping_a_running_vm_terminates_its_process() -> Fallible {
 fn a_silent_device_times_out_the_handshake() -> Fallible {
     let dir = scratch("silent")?;
     let mut vm = start(&dir, STAYS_UP, None)?;
-    let listener = UnixListener::bind(vm.socket())?;
+    let listener = device_listener(vm.socket())?;
     let _device = std::thread::spawn(move || {
-        let Ok((_stream, _)) = listener.accept() else {
+        let Ok(_stream) = accept(&listener) else {
             return;
         };
         std::thread::sleep(std::time::Duration::from_millis(3_000));

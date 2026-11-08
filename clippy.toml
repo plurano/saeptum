@@ -1,2 +1,9 @@
 # Clippy linting configuration
 avoid-breaking-exported-api = true
+
+# Every I/O call carries a deadline (HISS-02). The standard Unix listener's
+# accept cannot take one, so a test device built on it hangs when its client
+# never comes; the review of #38 found one.
+disallowed-types = [
+    { path = "std::os::unix::net::UnixListener", reason = "its accept has no deadline (HISS-02)", replacement = "socket2::Socket with set_read_timeout, as in device_listener of crates/saeptum-microvm/tests/running_vm.rs" },
+]
