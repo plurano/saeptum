@@ -3,9 +3,10 @@
 
 //! Epic E06-2: the bounded microVM table.
 //!
-//! Positive: 64 sandboxes are accepted. Negative: terminating an identifier
-//! the table does not hold returns `false`. Boundary: the 65th sandbox is
-//! refused, and the refusal names the bound it hit.
+//! Positive: 64 sandboxes are accepted, and the default table is empty.
+//! Negative: terminating an identifier the table does not hold returns `false`.
+//! Boundary: the 65th sandbox is refused, and the refusal names the bound it
+//! hit.
 //!
 //! Nothing here boots anything. A pass is evidence about a fixed array.
 
@@ -20,6 +21,19 @@ use saeptum_capsule::{
 use common::{Fallible, GUEST_MIB, SANDBOX, filled_controller, label, sandbox_request};
 
 // --- Positive -------------------------------------------------------------
+
+/// Positive: the default controller is empty, and its first spawned sandbox
+/// receives `FIRST_VM_ID`.
+#[test]
+fn the_default_table_is_the_empty_table() -> Fallible {
+    let mut controller = MicroVmController::default();
+    assert_eq!(controller.count(), 0);
+    assert_eq!(controller.running(), 0);
+    assert!(controller.is_empty());
+    let id = controller.spawn(sandbox_request(VmmIdentity::QemuMicrovm)?)?;
+    assert_eq!(id, VmId::new(FIRST_VM_ID));
+    Ok(())
+}
 
 /// Positive: the table accepts the full 64 sandboxes, and every row is running.
 #[test]

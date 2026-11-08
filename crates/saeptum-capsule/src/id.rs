@@ -52,22 +52,21 @@ const fn permitted(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'@' | b'/')
 }
 
-fn validate(raw: &str, max: usize) -> Result<(), IdError> {
+/// Admits `raw` into inline storage of `CAP` bytes, refusing an empty value,
+/// one longer than `CAP` and one carrying a byte outside the permitted set,
+/// in that order. The storage's own capacity check is the length check.
+fn admit<const CAP: usize>(raw: &str) -> Result<ArrayString<CAP>, IdError> {
     if raw.is_empty() {
         return Err(IdError::Empty);
     }
-    if raw.len() > max {
-        return Err(IdError::TooLong {
-            max,
-            actual: raw.len(),
-        });
+    let inner = ArrayString::from(raw).map_err(|_| IdError::TooLong {
+        max: CAP,
+        actual: raw.len(),
+    })?;
+    if !raw.bytes().all(permitted) {
+        return Err(IdError::Charset);
     }
-    for &byte in raw.as_bytes() {
-        if !permitted(byte) {
-            return Err(IdError::Charset);
-        }
-    }
-    Ok(())
+    Ok(inner)
 }
 
 macro_rules! bounded_id {
@@ -88,15 +87,9 @@ macro_rules! bounded_id {
             /// or carries a byte outside the permitted character set. The input
             /// is never truncated or sanitised.
             pub fn parse(raw: &str) -> Result<Self, IdError> {
-                validate(raw, $cap)?;
-                let mut inner = ArrayString::new();
-                if inner.try_push_str(raw).is_err() {
-                    return Err(IdError::TooLong {
-                        max: $cap,
-                        actual: raw.len(),
-                    });
-                }
-                Ok(Self { inner })
+                Ok(Self {
+                    inner: admit::<$cap>(raw)?,
+                })
             }
 
             /// Returns the validated bytes.
@@ -107,13 +100,13 @@ macro_rules! bounded_id {
 
             /// Returns the length in bytes.
             #[must_use]
-            pub fn len(&self) -> usize {
+            pub const fn len(&self) -> usize {
                 self.inner.len()
             }
 
             /// Returns `false`; an identifier is never empty by construction.
             #[must_use]
-            pub fn is_empty(&self) -> bool {
+            pub const fn is_empty(&self) -> bool {
                 self.inner.is_empty()
             }
         }

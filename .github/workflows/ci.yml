@@ -3,10 +3,17 @@ name: CI
 
 'on':
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # Title (the squash subject, read by the semver job) or base edits rerun
+    # every job; jobs take seconds and none is skipped on edited, since a
+    # skipped required check would report success over an earlier failure.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: ['main']
   merge_group:
+
+# No job writes through the token; checkout only reads (same as reuse.yml).
+permissions:
+  contents: read
 
 env:
   # cargo-deny runs the licence allow-list of deny.toml. The digest is the one
@@ -18,6 +25,12 @@ env:
   # publishes for the Linux archive of this version.
   CARGO_MUTANTS_VERSION: "27.1.0"
   CARGO_MUTANTS_SHA256_LINUX: "dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e"
+  # cargo-semver-checks holds the public Rust API of each library crate to the
+  # pull request's base: a breaking change fails unless the title marks it with
+  # `!`. The digest is the one its release publishes for the Linux archive of
+  # this version.
+  CARGO_SEMVER_CHECKS_VERSION: "0.51.0"
+  CARGO_SEMVER_CHECKS_SHA256_LINUX: "396c8508d973c83de52660943a057e971b586f7511c3ba695762373452b43d5b"
 
 jobs:
   test:
@@ -82,17 +95,21 @@ jobs:
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: cargo test --all-features
 
-      # The archive is held to its pinned digest before anything of it is
+      # The script holds the archive to its pinned digest before anything is
       # unpacked; a changed archive fails the comparison.
       - name: Install the pinned cargo-deny
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           archive="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl"
           cd "$RUNNER_TEMP"
-          curl --fail --silent --show-error --location --max-time 120 \
-            --output "${archive}.tar.gz" \
-            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}/${archive}.tar.gz"
-          echo "${CARGO_DENY_SHA256_LINUX}  ${archive}.tar.gz" | sha256sum -c -
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo EmbarkStudios/cargo-deny \
+            --tag "${CARGO_DENY_VERSION}" \
+            --asset "${archive}.tar.gz" \
+            --sha256 "${CARGO_DENY_SHA256_LINUX}" \
+            --out "${archive}.tar.gz"
           mkdir -p bin
           tar -xzf "${archive}.tar.gz" "${archive}/cargo-deny"
           install -m 0755 "${archive}/cargo-deny" bin/cargo-deny
@@ -104,6 +121,21 @@ jobs:
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: make licences
 
+      # Codacy runs Bandit and Prospector, which accept a nosec with no
+      # reason or with one Bandit reads as test names; these steps refuse
+      # both. Python only, so no Cargo workspace is needed.
+      - name: Selftest the nosec check
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_nosec.py --selftest
+
+      - name: Refuse a nosec without rule ids and a reason
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_nosec.py
+
+      - name: Selftest the release fetch
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/fetch_release.py --selftest
+
   # Like the test job, it fails a draft in its first step rather than skipping
   # it in the job condition: a skipped job reports success.
   mutants:
@@ -112,7 +144,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - name: Stop on a draft pull request
+      - &draft-stop
+        name: Stop on a draft pull request
         if: github.event.pull_request.draft == true
         shell: bash
         env:
@@ -125,7 +158,8 @@ jobs:
           echo "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
           exit 1
 
-      - name: Check out
+      - &full-history-checkout
+        name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -133,17 +167,23 @@ jobs:
 
       # With no toolchain argument rustup installs the channel
       # rust-toolchain.toml pins.
-      - name: Materialise the pinned Rust toolchain
+      - &pinned-toolchain
+        name: Materialise the pinned Rust toolchain
         run: |
           rustup toolchain install --no-self-update --profile minimal
           rustup show active-toolchain
 
       - name: Install cargo-mutants
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           archive=cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
-          curl --fail --silent --show-error --location --max-time 120 -o "$archive" \
-            "https://github.com/sourcefrog/cargo-mutants/releases/download/v${CARGO_MUTANTS_VERSION}/${archive}"
-          echo "${CARGO_MUTANTS_SHA256_LINUX}  ${archive}" | sha256sum -c -
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo sourcefrog/cargo-mutants \
+            --tag "v${CARGO_MUTANTS_VERSION}" \
+            --asset "$archive" \
+            --sha256 "${CARGO_MUTANTS_SHA256_LINUX}" \
+            --out "$archive"
           mkdir -p "$RUNNER_TEMP/bin"
           tar -xzf "$archive" -C "$RUNNER_TEMP/bin" cargo-mutants
           rm "$archive"
@@ -174,3 +214,67 @@ jobs:
           if [ -s "$out/missed.txt" ]; then
             { echo '```'; cat "$out/missed.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  semver:
+    name: Public API (cargo-semver-checks)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      # The mutants job's draft stop, by alias.
+      - *draft-stop
+
+      # The mutants job's checkout, by alias.
+      - *full-history-checkout
+
+      # The mutants job's toolchain step, by alias.
+      - *pinned-toolchain
+
+      # Firecracker runs x86_64 and aarch64 guests, and saeptum-microvm's
+      # public BOOT_TIMER_ADDRESS differs per architecture, so the API is
+      # checked for both; rustdoc needs the aarch64 standard library only.
+      - name: Add the aarch64 standard library
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      # macOS and Windows get no leg: saeptum-microvm builds only on Linux
+      # (AF_VSOCK through socket2 exists only on Linux and Android), and
+      # every other crate has no OS-conditional item, so its API is the same
+      # on every host. This step fails once an OS-conditional item appears;
+      # the gate then needs a leg per OS.
+      - name: Refuse OS-conditional items
+        run: |
+          if grep -rnE 'cfg(_attr)?\(.*(target_os|target_family|unix|windows)' crates/; then
+            echo "FAIL: OS-conditional code found; run the API gate on each OS it builds on" >&2
+            exit 1
+          fi
+
+      - name: Install cargo-semver-checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive=cargo-semver-checks-x86_64-unknown-linux-musl.tar.gz
+          python3 -B "$GITHUB_WORKSPACE/tools/fetch_release.py" \
+            --repo obi1kenobi/cargo-semver-checks \
+            --tag "v${CARGO_SEMVER_CHECKS_VERSION}" \
+            --asset "$archive" \
+            --sha256 "${CARGO_SEMVER_CHECKS_SHA256_LINUX}" \
+            --out "$archive"
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" cargo-semver-checks
+          rm "$archive"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Selftest the package selection
+        run: python3 -B tools/semver_scope.py selftest
+
+      # The title is read from the environment, never interpolated into the
+      # script.
+      - name: Check the public API against the base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          cargo semver-checks --version
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            python3 -B tools/semver_scope.py check --baseline-rev "$BASE_SHA" --subject="$PR_TITLE" --target "$target" || exit 1
+          done
