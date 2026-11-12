@@ -7,8 +7,12 @@ Check:
     Ensures every planted crate sits under a directory segment named fixtures.
     Every tracked Cargo.toml that is nested (path holds a /), has a [package]
     table, has its own [workspace] table, and is not publishable, must sit under
-    a fixtures/ segment (regex (^|/)fixtures/). The root Cargo.toml is never a
-    planted crate.
+    a fixtures/ segment (regex (^|/)fixtures/). The root Cargo.toml and a
+    workspace member (no own [workspace]) are never planted crates.
+    Not publishable: publish = false, publish = [], or publish =
+    { workspace = true } resolving to one of those in the same file's
+    [workspace.package]. An inherited publish that the file does not define is
+    an error, as cargo refuses that manifest.
 
 Why:
     The praetor library layer (tools/planning/library_units.py:140 in the engine)
@@ -24,7 +28,9 @@ Why:
 Exit codes:
     0 = every planted crate sits under a fixtures/ directory
     1 = planted crate outside a fixtures/ directory
-    2 = could not run
+    2 = could not run: git failed, a tracked manifest is missing, unreadable,
+        non-UTF-8, over the size limit, invalid TOML, or has a publish value
+        of unknown shape
 """
 
 from __future__ import annotations
@@ -36,7 +42,6 @@ import re
 import subprocess  # nosec B404  # runs only git, fixed argv list, never a shell
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 
 GIT_TIMEOUT_SECONDS = 60
@@ -125,12 +130,24 @@ MEMORY_CASES: tuple[tuple[str, str, str, str], ...] = (
         "fail",
     ),
     (
-        "same with [workspace.package] lacking publish",
+        "same with [workspace.package] lacking publish (cargo refuses it)",
         "nested/Cargo.toml",
         (
             '[package]\nname = "p"\npublish = { workspace = true }\n\n[workspace]\n'
-            '[workspace.package]\nname = "ws"\n'
+            '[workspace.package]\nversion = "0.0.0"\n'
         ),
+        "error",
+    ),
+    (
+        "publish = { workspace = true } with own [workspace], no [workspace.package]",
+        "nested/Cargo.toml",
+        '[package]\nname = "p"\npublish = { workspace = true }\n\n[workspace]\n',
+        "error",
+    ),
+    (
+        "member without own [workspace] inheriting publish from the workspace above",
+        "crates/a/Cargo.toml",
+        '[package]\nname = "a"\npublish = { workspace = true }\n',
         "pass",
     ),
     (
@@ -151,16 +168,24 @@ MEMORY_CASES: tuple[tuple[str, str, str, str], ...] = (
         '[package]\nname = "p"\npublish = { workspace = false }\n\n[workspace]\n',
         "error",
     ),
+    # The two cases below define [workspace.package].publish, so only the shape
+    # of the inheriting value can make them errors.
     (
         "publish = { workspace = 1 }",
         "nested/Cargo.toml",
-        '[package]\nname = "p"\npublish = { workspace = 1 }\n\n[workspace]\n',
+        (
+            '[package]\nname = "p"\npublish = { workspace = 1 }\n\n[workspace]\n'
+            "[workspace.package]\npublish = false\n"
+        ),
         "error",
     ),
     (
         "publish = { workspace = true, extra = 1 }",
         "nested/Cargo.toml",
-        '[package]\nname = "p"\npublish = { workspace = true, extra = 1 }\n\n[workspace]\n',
+        (
+            '[package]\nname = "p"\npublish = { workspace = true, extra = 1 }\n\n'
+            "[workspace]\n[workspace.package]\npublish = false\n"
+        ),
         "error",
     ),
     (
@@ -180,16 +205,22 @@ MEMORY_CASES: tuple[tuple[str, str, str, str], ...] = (
     ),
 )
 
-SCAN_CASES: tuple[tuple[str, list[tuple[str, str, bool]], int, str], ...] = (
+# How a scan case leaves each file: staged, never staged, or staged and then
+# removed from the working tree.
+TRACKED = "tracked"
+UNTRACKED = "untracked"
+DELETED = "deleted"
+
+SCAN_CASES: tuple[tuple[str, list[tuple[str, str | bytes, str]], int, str], ...] = (
     (
         "a planted crate under a/fixtures/p/ only -> 0",
-        [("a/fixtures/p/Cargo.toml", PLANTED_TOML, True)],
+        [("a/fixtures/p/Cargo.toml", PLANTED_TOML, TRACKED)],
         0,
         "PASS:",
     ),
     (
         "a planted crate under a/p/ -> 1",
-        [("a/p/Cargo.toml", PLANTED_TOML, True)],
+        [("a/p/Cargo.toml", PLANTED_TOML, TRACKED)],
         1,
         (
             "FAIL: a/p/Cargo.toml: planted crate (publish = false, own [workspace]) "
@@ -198,21 +229,54 @@ SCAN_CASES: tuple[tuple[str, list[tuple[str, str, bool]], int, str], ...] = (
     ),
     (
         "an untracked planted crate under a/p/ -> 0",
-        [("a/p/Cargo.toml", PLANTED_TOML, False)],
+        [("a/p/Cargo.toml", PLANTED_TOML, UNTRACKED)],
         0,
         "PASS:",
     ),
     (
         "a planted file named Cargo.toml.in under a/p/ -> 0",
-        [("a/p/Cargo.toml.in", PLANTED_TOML, True)],
+        [("a/p/Cargo.toml.in", PLANTED_TOML, TRACKED)],
         0,
         "PASS:",
     ),
     (
         "an invalid TOML tracked nested Cargo.toml -> 2",
-        [("a/p/Cargo.toml", "[package\n", True)],
+        [("a/p/Cargo.toml", "[package\n", TRACKED)],
         2,
         "ERROR: a/p/Cargo.toml",
+    ),
+    (
+        "a non-UTF-8 tracked nested Cargo.toml -> 2",
+        [("a/p/Cargo.toml", b"\xff\xfe[package]\n", TRACKED)],
+        2,
+        "ERROR: a/p/Cargo.toml: non-UTF-8 content",
+    ),
+    (
+        "a tracked Cargo.toml of exactly the size limit -> 0",
+        [("a/p/Cargo.toml", "#" * MAX_BYTES, TRACKED)],
+        0,
+        "PASS:",
+    ),
+    (
+        "a tracked Cargo.toml one byte over the size limit -> 2",
+        [("a/p/Cargo.toml", "#" * (MAX_BYTES + 1), TRACKED)],
+        2,
+        "exceeds limit",
+    ),
+    (
+        "a tracked Cargo.toml deleted from the working tree -> 2",
+        [("a/p/Cargo.toml", PLANTED_TOML, DELETED)],
+        2,
+        "ERROR: a/p/Cargo.toml: tracked by git but missing from the working tree",
+    ),
+    (
+        "a corrupt git index -> 2",
+        [
+            ("a/fixtures/p/Cargo.toml", PLANTED_TOML, TRACKED),
+            (".git/index", b"not an index", UNTRACKED),
+        ],
+        2,
+        "git ls-files failed",
     ),
 )
 
@@ -238,7 +302,11 @@ def _resolve_workspace_publish(path: str, data: dict[str, object], raw: object) 
     ws = data.get("workspace")
     ws_pkg = ws.get("package") if isinstance(ws, dict) else None
     if not isinstance(ws_pkg, dict) or "publish" not in ws_pkg:
-        return True
+        # cargo refuses the manifest: nothing defines the inherited value.
+        raise ValueError(
+            f"{path}: publish = {{ workspace = true }} but [workspace.package] "
+            "sets no publish; cargo refuses this manifest"
+        )
     ws_lit = _is_publish_literal(ws_pkg["publish"])
     if ws_lit is not None:
         return ws_lit
@@ -267,6 +335,11 @@ def check_manifest(path: str, text: str) -> tuple[str, str]:
 
     Status is 'pass', 'fail', or 'error'.
     """
+    # Imported here, its one user: Codacy runs Ruff without a target version,
+    # sorts tomllib (stdlib since Python 3.11) as third-party and reports I001
+    # on any top-level placement that sorts right for Python 3.11.
+    import tomllib
+
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
@@ -274,7 +347,11 @@ def check_manifest(path: str, text: str) -> tuple[str, str]:
 
     if "/" not in path:
         return "pass", ""
+    # A manifest without its own [workspace] is a workspace member and takes
+    # its inherited keys from the workspace above it, so it is never planted.
     if not isinstance(data.get("package"), dict):
+        return "pass", ""
+    if not isinstance(data.get("workspace"), dict):
         return "pass", ""
 
     try:
@@ -282,8 +359,6 @@ def check_manifest(path: str, text: str) -> tuple[str, str]:
     except ValueError as exc:
         return "error", f"ERROR: {exc}"
 
-    if not isinstance(data.get("workspace"), dict):
-        return "pass", ""
     if is_pub:
         return "pass", ""
     if FIXTURES_RE.search(path):
@@ -329,7 +404,11 @@ def _read_and_check(root: Path, rel_path: str) -> tuple[bool, str, str]:
     """
     file_path = root / rel_path
     if not file_path.is_file():
-        return False, "pass", ""
+        err = (
+            f"ERROR: {rel_path}: tracked by git but missing from the working tree; "
+            "restore it or stage its deletion"
+        )
+        return False, "error", err
     try:
         st = file_path.stat()
         if st.st_size > MAX_BYTES:
@@ -397,10 +476,25 @@ def _run_git(argv: list[str], cwd: Path) -> None:
         raise RuntimeError(f"git command failed ({' '.join(argv)}): {err}")
 
 
+def _populate_repo(repo: Path, files: list[tuple[str, str | bytes, str]]) -> None:
+    """Write each case file, then stage or remove it as its mode says."""
+    for rel, content, mode in files:
+        fpath = repo / rel
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            fpath.write_bytes(content)
+        else:
+            fpath.write_text(content, encoding="utf-8")
+        if mode != UNTRACKED:
+            _run_git(["git", "add", "--", rel], cwd=repo)
+        if mode == DELETED:
+            fpath.unlink()
+
+
 def _run_single_scan_case(
     scratch: Path,
     case_name: str,
-    files: list[tuple[str, str, bool]],
+    files: list[tuple[str, str | bytes, str]],
     exp_status: int,
     exp_sub: str,
 ) -> tuple[int, int]:
@@ -408,12 +502,7 @@ def _run_single_scan_case(
     repo = scratch / case_name
     repo.mkdir(parents=True, exist_ok=True)
     _run_git(["git", "-c", "init.defaultBranch=main", "init", "-q"], cwd=repo)
-    for rel, content, tracked in files:
-        fpath = repo / rel
-        fpath.parent.mkdir(parents=True, exist_ok=True)
-        fpath.write_text(content, encoding="utf-8")
-        if tracked:
-            _run_git(["git", "add", rel], cwd=repo)
+    _populate_repo(repo, files)
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         status = run_scan(repo)

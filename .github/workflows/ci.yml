@@ -152,7 +152,10 @@ jobs:
 
       # Planted crates must sit under a fixtures directory so the engine does
       # not read them as library nodes. Python and git only, so no Cargo
-      # workspace is needed.
+      # workspace is needed. No macOS or Windows leg: the check reads git's
+      # tracked tree, which is the same on every host, through git's
+      # '/'-separated paths, pathlib and explicit UTF-8, and its selftest
+      # builds its scratch repositories the same way.
       - name: Selftest the planted-crate check
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_planted_crates.py --selftest
