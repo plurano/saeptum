@@ -49,9 +49,9 @@ precedence = "closest"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
 
-# Cargo writes the lock file and gives it no room for a header.
+# Generated lock files have no room for a header.
 [[annotations]]
-path = ["Cargo.lock", "tools/deny/fixtures/refused/Cargo.lock", "tools/deny/fixtures/advised/Cargo.lock.in"]
+path = ["tools/complexity/requirements.txt", "Cargo.lock", "tools/deny/fixtures/refused/Cargo.lock", "tools/deny/fixtures/advised/Cargo.lock.in"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"

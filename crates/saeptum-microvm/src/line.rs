@@ -88,12 +88,10 @@ pub fn read_line<R: Read>(
         if started.elapsed() > budget {
             return Err(deadline_error(what, budget));
         }
-        match reader.read(&mut byte) {
-            Ok(0) => return Ok(Err(Unframed::Closed(bytes.len()))),
-            Ok(_) => bytes.extend_from_slice(&byte),
-            Err(error) if timed_out(&error) => return Err(deadline_error(what, budget)),
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(error) => return Err(MicroVmError::io(what, error)),
+        match read_byte(reader, &mut byte, what, budget)? {
+            Step::Byte => bytes.extend_from_slice(&byte),
+            Step::Closed => return Ok(Err(Unframed::Closed(bytes.len()))),
+            Step::Retry => continue,
         }
         if bytes.last() == Some(&b'\n') {
             let text = String::from_utf8(bytes).map_err(|_| {
@@ -105,6 +103,32 @@ pub fn read_line<R: Read>(
     Err(MicroVmError::Protocol(format!(
         "{what} passed its bound of {bound} bytes without a newline"
     )))
+}
+
+/// Outcome of one bounded read attempt.
+enum Step {
+    /// One byte arrived.
+    Byte,
+    /// The peer closed the stream.
+    Closed,
+    /// An interruption consumed this attempt without a byte.
+    Retry,
+}
+
+/// Reads one byte, preserving close, timeout and interruption semantics.
+fn read_byte<R: Read>(
+    reader: &mut R,
+    byte: &mut [u8; 1],
+    what: &'static str,
+    budget: Duration,
+) -> Result<Step, MicroVmError> {
+    match reader.read(byte) {
+        Ok(0) => Ok(Step::Closed),
+        Ok(_) => Ok(Step::Byte),
+        Err(error) if timed_out(&error) => Err(deadline_error(what, budget)),
+        Err(error) if error.kind() == ErrorKind::Interrupted => Ok(Step::Retry),
+        Err(error) => Err(MicroVmError::io(what, error)),
+    }
 }
 
 /// Returns `true` for the error kinds a socket read timeout yields.

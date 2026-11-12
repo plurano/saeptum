@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope complexity
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope complexity
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -129,3 +129,13 @@ semver-scope:
 	@python3 -B tools/semver_scope.py os-conditional
 	@test -n "$(SEMVER_BASE)" || { printf '%s\n' 'FAIL: no merge base with origin/main' >&2; exit 1; }
 	@python3 -B tools/semver_scope.py check --baseline-rev $(SEMVER_BASE)
+
+# HISS-04 cyclomatic complexity: cap every tracked Rust function at 10, with
+# lizard pinned and installed by pip's hash-enforcing path. Each lock and
+# interpreter version has a keyed venv under .cache/lizard-venv, built in a
+# temporary directory and renamed into place. Concurrent runs never delete
+# a venv in use; stale keys stay until .cache is removed.
+complexity:
+	@python3 -I -B tools/complexity/run.py selftest
+	@python3 -I -B tools/complexity/run.py check --selftest
+	@python3 -I -B tools/complexity/run.py check

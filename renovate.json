@@ -6,6 +6,16 @@
   "extends": [
     "github>plurano/horistes"
   ],
+  "pip-compile": {
+    "description": "Update the hash-locked lizard pin of tools/check_complexity.py by re-running the uv pip compile command its header records; the manager reads tools/complexity/requirements.in through that header.",
+    "managerFilePatterns": [
+      "/^tools/complexity/requirements\\.txt$/"
+    ]
+  },
+  "pip_requirements": {
+    "description": "Off as the pip-compile manager documentation asks: that manager updates the .in source itself, and this one would bump requirements.txt without regenerating it from the source. The only other requirements file is praetor-managed and disabled below.",
+    "enabled": false
+  },
   "packageRules": [
     {
       "description": "praetor-managed files: praetorctl adopt ships their updates and praetorctl audit locks them byte for byte",

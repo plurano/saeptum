@@ -1,6 +1,8 @@
 target/
 .DS_Store
 
+.cache/
+
 # BEGIN praetor private artifacts (praetorctl adopt)
 .workingdir/
 .workingdir2/
