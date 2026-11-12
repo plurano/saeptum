@@ -4,11 +4,11 @@
 # Praetor ships one binary under two names; resolve whichever is installed.
 PRAETORCTL ?= $(shell command -v praetorctl 2>/dev/null || command -v standardsctl 2>/dev/null || echo praetorctl)
 CARGO_DENY ?= cargo deny
-.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
+.PHONY: all verify-all compile-context compile-context-verify caveman-sources audit build test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope
 
 all: build
 
-verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks fetch-release semver-scope
+verify-all: compile-context-verify caveman-sources audit test licences advisories mutant-exclusions nosec-reasons required-checks planted-crates fetch-release semver-scope
 
 compile-context:
 	@$(PRAETORCTL) compile-context
@@ -29,13 +29,13 @@ build:
 	@python3 -B tools/check_reuse.py
 
 # The licence allow-list of deny.toml over the locked graph. The planted case:
-# the crate under tools/deny/refused names a licence the list does not allow,
-# and cargo-deny exits 4 when a licence check fails; any other status means it
-# did not run the check.
+# the crate under tools/deny/fixtures/refused names a licence the list does not
+# allow, and cargo-deny exits 4 when a licence check fails; any other status
+# means it did not run the check.
 licences:
 	$(CARGO_DENY) --version
 	$(CARGO_DENY) --locked --config $(CURDIR)/deny.toml check licenses
-	@status=0; $(CARGO_DENY) --manifest-path tools/deny/refused/Cargo.toml \
+	@status=0; $(CARGO_DENY) --manifest-path tools/deny/fixtures/refused/Cargo.toml \
 		--locked --config $(CURDIR)/deny.toml check licenses \
 		>/dev/null 2>&1 || status=$$?; test "$$status" -eq 4 \
 		|| { printf 'FAIL: the planted licence was not refused: cargo-deny exited %s, not 4\n' \
@@ -43,9 +43,9 @@ licences:
 	@printf '%s\n' 'PASS: the planted licence is refused.'
 
 # The RustSec advisories over the locked graph, then planted test cases.
-# The planted crate under tools/deny/advised exercises four levels: smallvec
-# 1.6.0 (vulnerability RUSTSEC-2021-0003, direct); colored 1.9.3 pulls atty
-# 0.2.14, transitive, so all and not workspace reaches it (unsound
+# The planted crate under tools/deny/fixtures/advised exercises four levels:
+# smallvec 1.6.0 (vulnerability RUSTSEC-2021-0003, direct); colored 1.9.3
+# pulls atty 0.2.14, transitive, so all and not workspace reaches it (unsound
 # RUSTSEC-2021-0145, unmaintained RUSTSEC-2024-0375); scopeguard 0.3.0 locked
 # at the yanked version. The unused-ignore case exercises
 # unused-ignored-advisory over the main graph by injecting an ignored advisory
@@ -58,9 +58,9 @@ advisories:
 	@python3 -B tools/check_deny_output.py --selftest
 	@dir=$$(mktemp -d) || exit 1; trap 'rm -rf "$$dir"' EXIT; \
 		mkdir "$$dir/src" \
-		&& cp tools/deny/advised/Cargo.toml.in "$$dir/Cargo.toml" \
-		&& cp tools/deny/advised/Cargo.lock.in "$$dir/Cargo.lock" \
-		&& cp tools/deny/advised/src/lib.rs "$$dir/src/lib.rs" || exit 1; \
+		&& cp tools/deny/fixtures/advised/Cargo.toml.in "$$dir/Cargo.toml" \
+		&& cp tools/deny/fixtures/advised/Cargo.lock.in "$$dir/Cargo.lock" \
+		&& cp tools/deny/fixtures/advised/src/lib.rs "$$dir/src/lib.rs" || exit 1; \
 		status=0; $(CARGO_DENY) --format json --manifest-path "$$dir/Cargo.toml" \
 		--locked --config $(CURDIR)/deny.toml check advisories \
 		>"$$dir/planted.json" 2>&1 || status=$$?; \
@@ -105,6 +105,14 @@ nosec-reasons:
 required-checks:
 	@python3 -B tools/check_required_checks.py --selftest
 	@python3 -B tools/check_required_checks.py
+
+# Planted crate directory placement: every planted crate (publish = false, own
+# workspace) must sit under a fixtures/ segment so the engine reader drops it
+# and does not build a phantom library node; the selftest exercises parser
+# shapes and scans a scratch git repository.
+planted-crates:
+	@python3 -B tools/check_planted_crates.py --selftest
+	@python3 -B tools/check_planted_crates.py
 
 # Pinned release asset fetching: tries the release download route then falls
 # back to the API asset route; the selftest verifies fallback and digests.
