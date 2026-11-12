@@ -164,8 +164,11 @@ jobs:
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_planted_crates.py
 
+      # macOS and Windows get no leg: the check reads tracked sources as text,
+      # so its verdict does not depend on the host, and this job's cargo steps
+      # need Linux (saeptum-microvm uses AF_VSOCK, see the mutants job comment).
       - name: Check function complexity
-        if: github.event.pull_request.draft != true
+        if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: make complexity
 
       - name: Selftest the release fetch

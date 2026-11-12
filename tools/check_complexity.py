@@ -8,6 +8,8 @@ Check:
     function must have cyclomatic complexity at most 10, including Rust's ?.
     Each source is read here, bounded and strict UTF-8, and handed to lizard
     as text, so lizard never drops bytes or swallows a read error.
+    Git names use os.fsdecode; diagnostics escape non-UTF-8 filename bytes.
+    Planted CLI cases cover listing, output streams and exit codes together.
 
 Why:
     The existing audit measures function length, and Clippy measures cognitive
@@ -56,6 +58,10 @@ SCRATCH_ENV_KEYS = ("PATH", "SYSTEMROOT", "HOME", "TMPDIR")
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class ScratchFilenameError(OSError):
+    """A filesystem refused creation of a scratch fixture's filename."""
+
+
 def version_problem(text: str, installed: str) -> str | None:
     """Name why `installed` does not match the exact lizard pin in `text`."""
     pin = PIN.search(text)
@@ -73,8 +79,8 @@ def check_version(requirements: Path, installed: str) -> None:
         raise ValueError(f"{requirements}: {problem}")
 
 
-def git(root: Path, *args: str, env: dict[str, str] | None) -> str:
-    """Run git with a fixed argv, no shell and a deadline; return its stdout.
+def git(root: Path, *args: str, env: dict[str, str] | None) -> bytes:
+    """Run git with a fixed argv, no shell and a deadline; return stdout bytes.
 
     `env` has no default, so no call can drop the scratch environment by omission;
     None inherits this process's variables.
@@ -84,19 +90,25 @@ def git(root: Path, *args: str, env: dict[str, str] | None) -> str:
         cwd=root,
         env=env,
         capture_output=True,
-        text=True,
         timeout=GIT_TIMEOUT_SECONDS,
         check=True,
     )
     return result.stdout
 
 
-def tracked_rust_files(root: Path, env: dict[str, str] | None = None) -> list[str]:
-    """List tracked Rust sources under crates/ (git's * also matches /)."""
-    names = git(root, "ls-files", "-z", "--", "crates/*.rs", env=env).split("\0")
-    if names[-1] == "":
+def tracked_rust_files(root: Path, env: dict[str, str] | None = None, max_files: int = MAX_FILES) -> list[str]:
+    """List tracked Rust sources under crates/ (git's * also matches /); refuse more than max_files."""
+    names = git(root, "ls-files", "-z", "--", "crates/*.rs", env=env).split(b"\0")
+    if names[-1] == b"":
         names.pop()
-    return names
+    if len(names) > max_files:
+        raise ValueError(f"git listed {len(names)} Rust files, more than {max_files}")
+    return [os.fsdecode(name) for name in names[:max_files]]
+
+
+def printable(text: str) -> str:
+    """Escape undecodable filename bytes while preserving valid UTF-8 text."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
 
 
 def read_source(path: Path, max_bytes: int) -> str:
@@ -170,6 +182,17 @@ def analyse_paths(
 def planted(ccn: int, name: str = "planted") -> bytes:
     """Rust function `name` with cyclomatic complexity `ccn`."""
     return (f"fn {name}() {{" + "if true {}" * (ccn - 1) + "}\n").encode("utf-8")
+
+
+def gate(root: Path, env: dict[str, str] | None) -> int:
+    """List tracked sources, analyse them and emit the full CLI verdict."""
+    try:
+        status, output = analyse_paths(root, tracked_rust_files(root, env=env))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(printable(f"ERROR: complexity check could not run: {error}"), file=sys.stderr)
+        return 2
+    print(printable(output), file=sys.stdout if status == 0 else sys.stderr)
+    return status
 
 
 def cap_cases() -> tuple:
@@ -265,28 +288,55 @@ def check_version_selftest() -> int:
     return int(not drift)
 
 
-def git_selftest(source: Mapping[str, str], label: str) -> int:
-    """List a scratch repository built from `source`: only tracked .rs under crates/ count.
-
-    A config entry passed through the environment and read back proves that
-    every git call received the scratch environment.
-    """
+def scratch_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Keep the scratch Git environment isolated from hook and user config."""
     env = {key: source[key] for key in SCRATCH_ENV_KEYS if key in source}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="selftest.scratch", GIT_CONFIG_VALUE_0="yes")
+    return env
+
+
+def scratch_repository(
+    root: Path, source: Mapping[str, str], files: dict[str, bytes], tracked: tuple[str, ...],
+) -> dict[str, str]:
+    """Write fixture files and track the requested names in an isolated repository."""
+    env = scratch_environment(source)
+    try:
+        for name, data in list(files.items())[:MAX_FILES]:
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes(data)
+    except (OSError, UnicodeError) as error:
+        raise ScratchFilenameError(str(error)) from error
+    git(root, "init", "-q", env=env)
+    git(root, "add", "--", *tracked, env=env)
+    return env
+
+
+def listing_refused(root: Path, env: dict[str, str], max_files: int) -> bool:
+    """True when the tracked listing refuses a bound below the number of files."""
+    try:
+        tracked_rust_files(root, env=env, max_files=max_files)
+    except ValueError:
+        return True
+    return False
+
+
+def git_selftest(source: Mapping[str, str], label: str) -> int:
+    """Check tracked Rust selection, its file bound and environment forwarding on every Git call."""
     tracked = ("crates/a/src/lib.rs", "crates/a/tests/t.rs", "crates/a/Cargo.toml", "x.rs")
     expected = ["crates/a/src/lib.rs", "crates/a/tests/t.rs"]
+    files = {name: planted(1) for name in (*tracked, "crates/a/src/new.rs")}
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        for name in (*tracked, "crates/a/src/new.rs"):
-            (root / name).parent.mkdir(parents=True, exist_ok=True)
-            (root / name).write_bytes(planted(1))
-        git(root, "init", "-q", env=env)
+        env = scratch_repository(root, source, files, tracked)
         forwarded = git(root, "config", "--get", "selftest.scratch", env=env)
-        git(root, "add", "--", *tracked, env=env)
-        listed = tracked_rust_files(root, env=env)
-    if listed != expected or forwarded != "yes\n":
-        print(f"FAIL: tracked crates/*.rs listing ({label}): expected {expected}; got {listed}, config {forwarded!r}")
+        listed = tracked_rust_files(root, env=env, max_files=2)
+        refused = listing_refused(root, env, 1)
+    if listed != expected or forwarded != b"yes\n" or not refused:
+        print(
+            f"FAIL: tracked crates/*.rs listing ({label}): expected {expected} at bound 2 and a refusal at 1; "
+            f"got {listed}, refused {refused}, config {forwarded!r}"
+        )
         return 1
     print(f"PASS: tracked crates/*.rs listing ({label})")
     return 0
@@ -307,13 +357,60 @@ def hook_selftest() -> int:
             "GIT_WORK_TREE": decoy,
             "GIT_INDEX_FILE": os.path.join(decoy, "index"),
         }
-        return git_selftest(hook, "hook environment")
+        failures = git_selftest(hook, "hook environment")
+        extra = sorted(entry.name for entry in list(Path(decoy).iterdir())[:MAX_FILES] if entry.name not in {"ignore", ".gitconfig"})
+        if extra:
+            print(f"FAIL: hook variables reached the scratch repository: {extra}")
+            return 1
+        print("PASS: hook variables left no scratch artifacts in the decoy")
+        return int(failures != 0)
+
+
+def cli_cases() -> tuple:
+    """Cover cap boundaries, Git failure and undecodable filenames through gate()."""
+    non_utf8 = os.fsdecode(b"crates/a/src/\xff.rs")
+    return (
+        ("CLI over cap", {"crates/a/src/lib.rs": planted(11), "crates/a/src/ok.rs": planted(1)}, 1,
+         "crates/a/src/lib.rs:1: planted CCN 11 > 10"),
+        ("CLI within cap", {"crates/a/src/lib.rs": planted(10)}, 0, "PASS: 1 functions in 1 Rust files"),
+        ("CLI git failure", {}, 2, "complexity check could not run"),
+        ("CLI non-UTF-8 path", {non_utf8: planted(11)}, 1, r"crates/a/src/\xff.rs:1: planted CCN 11 > 10"),
+    )
+
+
+def run_cli_case(case: tuple) -> int:
+    """Capture the full gate's streams and check its exit mapping in a scratch directory."""
+    label, files, expected, message = case
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        if files:
+            try:
+                env = scratch_repository(root, os.environ, files, tuple(files))
+            except ScratchFilenameError:
+                if label != "CLI non-UTF-8 path":
+                    raise
+                print("SKIP: non-UTF-8 path case: this filesystem refuses non-UTF-8 file names")
+                return 0
+        else:
+            env = scratch_environment(os.environ)
+            env["GIT_CEILING_DIRECTORIES"] = str(root.parent)
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            status = gate(root, env)
+    output = stdout.getvalue() if expected == 0 else stderr.getvalue()
+    other = stderr.getvalue() if expected == 0 else stdout.getvalue()
+    if status != expected or message not in output or other:
+        print(printable(f"FAIL: {label}: expected {expected} with {message!r}; got {status}: {output}; other: {other}"))
+        return 1
+    print(f"PASS: {label}")
+    return 0
 
 
 def selftest() -> int:
-    """Plant cap, bound, input, pin and git-listing cases; git runs only in scratch repositories."""
+    """Plant analysis and CLI cases; Git runs only in isolated scratch repositories."""
     failures = sum(run_case(case) for case in (*cap_cases(), *bound_cases()))
     failures += version_selftest() + git_selftest(os.environ, "clean environment") + hook_selftest()
+    failures += sum(run_cli_case(case) for case in cli_cases()[:4])
     return int(failures != 0)
 
 
@@ -329,12 +426,10 @@ def main() -> int:
         check_version(ROOT / "tools/complexity/requirements.in", lizard.version)
         if args.selftest:
             return selftest()
-        status, output = analyse_paths(ROOT, tracked_rust_files(ROOT))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
-        print(f"ERROR: complexity check could not run: {error}", file=sys.stderr)
+        print(printable(f"ERROR: complexity check could not run: {error}"), file=sys.stderr)
         return 2
-    print(output, file=sys.stdout if status == 0 else sys.stderr)
-    return status
+    return gate(ROOT, None)
 
 
 if __name__ == "__main__":

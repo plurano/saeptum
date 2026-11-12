@@ -131,16 +131,11 @@ semver-scope:
 	@python3 -B tools/semver_scope.py check --baseline-rev $(SEMVER_BASE)
 
 # HISS-04 cyclomatic complexity: cap every tracked Rust function at 10, with
-# lizard pinned and installed by pip's hash-enforcing path. The selftest
-# refuses CCN 11 (including ? operators), accepts 10, and fails closed on an
-# empty file list or zero functions. Rebuild only when the lock file changes.
-LIZARD_VENV := $(CURDIR)/.cache/lizard-venv
-$(LIZARD_VENV)/stamp: tools/complexity/requirements.txt
-	rm -rf $(LIZARD_VENV)
-	python3 -m venv $(LIZARD_VENV)
-	$(LIZARD_VENV)/bin/python -m pip install --quiet --disable-pip-version-check --require-hashes --no-deps -r tools/complexity/requirements.txt
-	touch $@
-
-complexity: $(LIZARD_VENV)/stamp
-	@$(LIZARD_VENV)/bin/python -I -B tools/check_complexity.py --selftest
-	@$(LIZARD_VENV)/bin/python -I -B tools/check_complexity.py
+# lizard pinned and installed by pip's hash-enforcing path. Each lock and
+# interpreter version has a keyed venv under .cache/lizard-venv, built in a
+# temporary directory and renamed into place. Concurrent runs never delete
+# a venv in use; stale keys stay until .cache is removed.
+complexity:
+	@python3 -I -B tools/complexity/run.py selftest
+	@python3 -I -B tools/complexity/run.py check --selftest
+	@python3 -I -B tools/complexity/run.py check
