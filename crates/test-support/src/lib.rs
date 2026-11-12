@@ -4,7 +4,7 @@
 //! Internal test fixtures and workspace manifest inspection helpers.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// What every fallible test in this workspace returns.
 pub type Fallible = Result<(), Box<dyn std::error::Error>>;
@@ -25,9 +25,24 @@ pub fn workspace_root() -> Option<PathBuf> {
 ///
 /// Returns `NotFound` when the workspace root cannot resolve. File errors
 /// preserve their kind and name the full path, including invalid UTF-8 input.
+/// Returns `InvalidInput` for absolute paths, parent traversal or path prefixes.
 pub fn read(name: &str) -> Result<String, io::Error> {
     let root = workspace_root()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "workspace root not found"))?;
+    read_under(&root, name)
+}
+
+/// Reads a relative name only after checking that its components stay under root.
+fn read_under(root: &Path, name: &str) -> Result<String, io::Error> {
+    if !Path::new(name)
+        .components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name}: not a relative path inside {}", root.display()),
+        ));
+    }
     let path = root.join(name);
     std::fs::read_to_string(&path).map_err(|error| path_error(&path, &error))
 }
@@ -35,6 +50,23 @@ pub fn read(name: &str) -> Result<String, io::Error> {
 /// Adds the failing path while retaining the operating system's error kind.
 fn path_error(path: &Path, error: &io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+}
+
+/// Joins literal relative components, refusing to alias non-UTF-8 names.
+fn relative_name(root: &Path, path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let components = relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| format!("{}: path name is not UTF-8", path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(components.join("/"))
 }
 
 /// Returns the entries of `directory`, refusing to drop any.
@@ -67,7 +99,9 @@ pub fn directory_entries(directory: &Path) -> Result<Vec<PathBuf>, io::Error> {
     Ok(paths)
 }
 
-/// Returns sorted `.rs` files as (relative path, body) pairs using `/` separators.
+/// Returns sorted `.rs` files as (relative path, body) pairs.
+///
+/// Names are literal path components joined by `/`.
 ///
 /// Visits at most [`WALK_BOUND`] directories, each with at most that many entries.
 /// The walk is iterative; exceeding either bound is an error.
@@ -75,6 +109,7 @@ pub fn directory_entries(directory: &Path) -> Result<Vec<PathBuf>, io::Error> {
 /// # Errors
 ///
 /// Names the failing path on directory, entry, metadata or UTF-8 read errors.
+/// A non-UTF-8 path name is an error.
 /// Also fails if a bound is exceeded or no Rust source was read under `root`.
 pub fn rust_sources(root: &Path) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
     let mut out = Vec::new();
@@ -88,11 +123,7 @@ pub fn rust_sources(root: &Path) -> Result<Vec<(String, String)>, Box<dyn std::e
             if metadata.is_dir() {
                 pending.push(path);
             } else if path.extension().is_some_and(|extension| extension == "rs") {
-                let name = path
-                    .strip_prefix(root)
-                    .map_err(|error| format!("{}: {error}", path.display()))?
-                    .to_string_lossy()
-                    .replace('\\', "/");
+                let name = relative_name(root, &path)?;
                 let body =
                     std::fs::read_to_string(&path).map_err(|error| path_error(&path, &error))?;
                 out.push((name, body));
@@ -176,11 +207,44 @@ mod tests {
     }
 
     #[test]
+    fn read_rejects_absolute_path() -> Fallible {
+        let path = workspace_root()
+            .ok_or("workspace root must resolve")?
+            .join("Cargo.toml");
+        let error = read(path.to_str().ok_or("workspace path must be UTF-8")?)
+            .err()
+            .ok_or("absolute path must fail")?;
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        Ok(())
+    }
+
+    #[test]
+    fn read_rejects_parent_traversal() -> Fallible {
+        for name in ["../x", "crates/../../x"] {
+            let error = read(name).err().ok_or("parent traversal must fail")?;
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains(name));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn read_under_accepts_current_directory_components() -> Fallible {
+        let content = fixture(|root| {
+            std::fs::create_dir(root.join("sub"))?;
+            std::fs::write(root.join("sub/a.txt"), "nested")?;
+            Ok(read_under(root, "./sub/a.txt")?)
+        })?;
+        assert_eq!(content, "nested");
+        Ok(())
+    }
+
+    #[test]
     fn read_rejects_non_utf8() -> Fallible {
         let error = fixture(|root| {
             let path = root.join("invalid.rs");
             std::fs::write(&path, [0xff])?;
-            Ok(read(path.to_str().ok_or("fixture path must be UTF-8")?))
+            Ok(read_under(root, "invalid.rs"))
         })?
         .err()
         .ok_or("invalid UTF-8 must fail")?;
@@ -278,6 +342,43 @@ mod tests {
                 ("z.rs".into(), "last".into())
             ]
         );
+        Ok(())
+    }
+
+    /// Unix only: other platforms may treat a backslash as a path separator.
+    #[cfg(unix)]
+    #[test]
+    fn rust_sources_keeps_literal_backslash() -> Fallible {
+        let sources = fixture(|root| {
+            std::fs::create_dir(root.join("guest"))?;
+            std::fs::write(root.join("guest/boot.rs"), "nested")?;
+            std::fs::write(root.join("guest\\boot.rs"), "literal")?;
+            rust_sources(root)
+        })?;
+        assert_eq!(
+            sources,
+            [
+                ("guest/boot.rs".into(), "nested".into()),
+                ("guest\\boot.rs".into(), "literal".into())
+            ]
+        );
+        Ok(())
+    }
+
+    /// Linux only: other platforms may reject non-UTF-8 file names at creation.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rust_sources_rejects_non_utf8_name() -> Fallible {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (result, name) = fixture(|root| {
+            let path = root.join(std::ffi::OsStr::from_bytes(b"bad\xff.rs"));
+            std::fs::write(&path, "// source")?;
+            Ok((rust_sources(root), path.display().to_string()))
+        })?;
+        let error = result.err().ok_or("non-UTF-8 file name must fail")?;
+        assert!(error.to_string().contains(&name));
+        assert!(error.to_string().contains("not UTF-8"));
         Ok(())
     }
 

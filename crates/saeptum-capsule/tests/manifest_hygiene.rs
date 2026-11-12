@@ -10,7 +10,28 @@
 //! the operating system it moved from**. Each is asserted here rather than
 //! left as prose.
 
+use std::path::Path;
 use test_support::{Fallible, directory_entries, read, workspace_root};
+
+/// Distinguishes an absent manifest from metadata that could not be read.
+fn has_manifest(directory: &Path) -> Result<bool, std::io::Error> {
+    let path = directory.join("Cargo.toml");
+    match std::fs::metadata(&path) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(std::io::Error::new(
+            error.kind(),
+            format!("{}: {error}", path.display()),
+        )),
+    }
+}
 
 /// The member list is checked against this rather than against a literal
 /// count. A count has to be edited every time a milestone activates a crate,
@@ -22,12 +43,16 @@ fn crate_directories_with_a_manifest() -> Result<Vec<String>, Box<dyn std::error
     let root = workspace_root()
         .ok_or("workspace root not found")?
         .join("crates");
-    let mut found: Vec<String> = directory_entries(&root)?
-        .iter()
-        .filter(|path| path.join("Cargo.toml").is_file())
-        .filter_map(|path| path.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .collect();
+    let mut found = Vec::new();
+    for path in directory_entries(&root)? {
+        if has_manifest(&path)? {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| format!("{}: crate directory name is not UTF-8", path.display()))?;
+            found.push(name.to_owned());
+        }
+    }
     found.sort_unstable();
     Ok(found)
 }
@@ -128,7 +153,34 @@ fn the_crate_declares_no_binary_target() -> Fallible {
     Ok(())
 }
 
+/// Negative: a metadata error other than an absent manifest propagates
+/// instead of reading as "no manifest here".
+///
+/// Unix only: a path component longer than 255 bytes fails there with
+/// `ENAMETOOLONG`; Windows limits and reports long names differently.
+#[cfg(unix)]
+#[test]
+fn has_manifest_propagates_other_metadata_errors() -> Fallible {
+    let root = workspace_root().ok_or("workspace root must resolve")?;
+    let error = has_manifest(&root.join("x".repeat(256)))
+        .err()
+        .ok_or("an over-long name must not read as an absent manifest")?;
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidFilename);
+    assert!(error.to_string().contains("Cargo.toml"));
+    Ok(())
+}
+
 // --- Boundary -------------------------------------------------------------
+
+/// Boundary: missing manifests and non-directories are absent, existing files present.
+#[test]
+fn has_manifest_distinguishes_absent_and_present_manifests() -> Fallible {
+    let root = workspace_root().ok_or("workspace root must resolve")?;
+    assert!(!has_manifest(&root.join("Cargo.toml"))?);
+    assert!(!has_manifest(&root.join("crates"))?);
+    assert!(has_manifest(&root.join("crates/saeptum-capsule"))?);
+    Ok(())
+}
 
 /// Boundary: the workspace lists exactly the crate directories that have a
 /// manifest, no more and no fewer.
