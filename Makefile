@@ -122,8 +122,10 @@ fetch-release:
 # The public Rust API of each library crate against the merge base with
 # origin/main; a commit subject marked `!` allows a breaking change. The
 # selftest verifies the package selection and the subject rule first.
+# The same OS-conditional source refusal runs locally and in CI.
 SEMVER_BASE ?= $(shell git merge-base origin/main HEAD 2>/dev/null)
 semver-scope:
 	@python3 -B tools/semver_scope.py selftest
+	@python3 -B tools/semver_scope.py os-conditional
 	@test -n "$(SEMVER_BASE)" || { printf '%s\n' 'FAIL: no merge base with origin/main' >&2; exit 1; }
 	@python3 -B tools/semver_scope.py check --baseline-rev $(SEMVER_BASE)

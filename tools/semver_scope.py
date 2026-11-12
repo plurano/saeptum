@@ -5,6 +5,7 @@
 
 Inspects cargo workspace metadata to select library crates, excluding
 crates marked with `[package.metadata.saeptum] public-api = false`.
+The `os-conditional` subcommand refuses OS-conditional items in gated sources.
 
 Evaluates git commit subjects or PR title for breaking change markers:
 `^[a-z]+(\\([^)]*\\))?!:`.
@@ -20,11 +21,15 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import pathlib
 import re
+import stat
 import subprocess  # nosec B404  # runs only git and cargo, fixed argv list, never a shell
 import sys
+import tempfile
 
 BREAKING_PATTERN = re.compile(r"^[a-z]+(\([^)]*\))?!:")
+OS_CONDITIONAL_PATTERN = re.compile(r"cfg(_attr)?\(.*(target_os|target_family|unix|windows)")
 
 # A branch, tag, remote ref or abbreviated or full commit id: no leading `-`
 # (never read as an option), no `..` (never a range), no shell metacharacter.
@@ -130,6 +135,44 @@ def select_packages(metadata: dict) -> list[str]:
         selected.append(pkg.get("name", ""))
 
     return sorted(selected)
+
+
+def gated_source_dirs(metadata: dict) -> list[pathlib.Path]:
+    """Sorted library source directories, using the semver package selection."""
+    selected = set(select_packages(metadata))
+    return sorted({
+        pathlib.Path(target["src_path"]).parent
+        for pkg in metadata.get("packages", [])
+        if pkg.get("name", "") in selected
+        for target in pkg.get("targets", [])
+        if "lib" in target.get("kind", [])
+    })
+
+
+def os_conditional_hits(dirs: list[pathlib.Path], limit: int) -> list[str]:
+    """Scan Rust sources; refuse unreadable paths or a walk beyond limit entries."""
+    pending = list(dirs)
+    hits = []
+    for _ in range(limit):
+        if not pending:
+            break
+        path = pending.pop()
+        try:
+            if stat.S_ISDIR(path.stat().st_mode):
+                pending.extend(path.iterdir())
+            elif path.suffix == ".rs":
+                hits.extend(
+                    f"{path}:{number}: {line}"
+                    for number, line in enumerate(
+                        path.read_text(encoding="utf-8").splitlines(), start=1
+                    )
+                    if OS_CONDITIONAL_PATTERN.search(line)
+                )
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(f"{path}: cannot scan source: {exc}") from exc
+    if pending:
+        raise ValueError(f"{pending[-1]}: source walk exceeds {limit} entries")
+    return sorted(hits)
 
 
 def check_revision(raw: str) -> str:
@@ -244,6 +287,23 @@ def cmd_packages(timeout: int = 120) -> int:
     return 0
 
 
+def cmd_os_conditional() -> int:
+    """Refuse OS-conditional items in the sources of semver-gated libraries."""
+    dirs = gated_source_dirs(fetch_metadata())
+    hits = os_conditional_hits(dirs, limit=100_000)
+    if hits:
+        for hit in hits:
+            print(hit)
+        print(
+            "FAIL: OS-conditional item in a gated crate's sources; "
+            "run the API gate on each OS it builds on",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"PASS: no OS-conditional item in {len(dirs)} gated source dirs")
+    return 0
+
+
 def cmd_check(
     baseline_rev: str,
     cli_subjects: list[str],
@@ -277,6 +337,7 @@ def _package(
     kind: str,
     deps: list[tuple[str, str | None]] | None = None,
     metadata: dict | None = None,
+    src_path: str | None = None,
 ) -> dict:
     """One package entry shaped like `cargo metadata` output."""
     pkg: dict = {
@@ -289,6 +350,8 @@ def _package(
     }
     if metadata is not None:
         pkg["metadata"] = metadata
+    if src_path is not None:
+        pkg["targets"][0]["src_path"] = src_path
     return pkg
 
 
@@ -568,6 +631,53 @@ def _target_failures() -> list[str]:
     return failures
 
 
+def _os_conditional_failures() -> list[str]:
+    """Case (l): gated sources only, cfg variants, nested files and walk bound."""
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        lib = root / "gated/src/lib.rs"
+        private = root / "private/src/lib.rs"
+        metadata = {
+            "workspace_members": ["gated", "private"],
+            "packages": [
+                _package("gated", "lib", src_path=str(lib)),
+                _package(
+                    "private", "lib", src_path=str(private),
+                    metadata={"saeptum": {"public-api": False}},
+                ),
+            ],
+        }
+        dirs = gated_source_dirs(metadata)
+        lib.parent.mkdir(parents=True)
+        private.parent.mkdir(parents=True)
+        unix = "#[cfg(unix)]"
+        attr = '#[cfg_attr(target_os = "linux", allow(dead_code))]'
+        cases = [
+            (lib, unix, True),
+            (lib, attr, True),
+            (root / "gated/tests/os.rs", f"{unix}\n{attr}", False),
+            (private, f"{unix}\n{attr}", False),
+            (lib, '#[cfg(test)]\n#[cfg(feature = "x")]', False),
+            (lib.parent / "a/b.rs", unix, True),
+        ]
+        for path, text, expected_hit in cases:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text + "\n", encoding="utf-8")
+            hits = os_conditional_hits(dirs, limit=100)
+            expected = [f"{path}:1: {text}"] if expected_hit else []
+            if hits != expected:
+                failures.append(f"(l) {path}: expected {expected!r}, got {hits!r}")
+            path.unlink()
+        try:
+            os_conditional_hits(dirs, limit=1)
+            failures.append("(l) exhausted source walk bound did not raise ValueError")
+        except ValueError as exc:
+            if "exceeds 1 entries" not in str(exc) or str(lib.parent) not in str(exc):
+                failures.append(f"(l) source walk bound error lacks context: {exc}")
+    return failures
+
+
 def selftest() -> bool:
     """Run planted cases verifying package selection, subject logic, and refusal."""
     failures = (
@@ -581,25 +691,28 @@ def selftest() -> bool:
         + _unknown_revision_failures()
         + _subcommand_failures()
         + _target_failures()
+        + _os_conditional_failures()
     )
     for failure in failures:
         print(f"FAIL: {failure}", file=sys.stderr)
     if failures:
         return False
     print(
-        "PASS: semver scope selection, subjects, refusal, input formats, argv, failure text and target verified."
+        "PASS: semver scope selection, subjects, refusal, input formats, argv, "
+        "failure text, target and OS-conditional sources verified."
     )
     return True
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """The command line: `packages`, `selftest`, or `check --baseline-rev REV [--subject TEXT]... [--target TRIPLE]`."""
+    """Parse `packages`, `os-conditional`, `selftest`, or `check` arguments."""
     parser = argparse.ArgumentParser(
         description="Filter and check public Rust API semver scope."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("packages", help="List library packages in scope")
     subparsers.add_parser("selftest", help="Run self-tests")
+    subparsers.add_parser("os-conditional", help="Refuse OS-conditional gated sources")
     check_parser = subparsers.add_parser("check", help="Run cargo semver-checks")
     check_parser.add_argument(
         "--baseline-rev",
@@ -629,6 +742,8 @@ def main() -> int:
     try:
         if args.command == "packages":
             return cmd_packages()
+        if args.command == "os-conditional":
+            return cmd_os_conditional()
         return cmd_check(
             baseline_rev=args.baseline_rev,
             cli_subjects=args.subject,
