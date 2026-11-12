@@ -26,13 +26,16 @@ fn decodes<T: serde::de::DeserializeOwned>(text: &str) -> bool {
 }
 
 // --- Golden bytes ---------------------------------------------------------
+//
+// The three tests below pin the exact JSON encoding of each of the seven
+// bounded types, so a change to a serde attribute (dropping `transparent`,
+// changing `try_from`, altering `into`) is caught by a byte comparison before
+// CI sees the round-trip tests. They are split by type group to keep each
+// test under the HISS-04 cyclomatic cap of 10.
 
-/// Golden bytes: pin the exact JSON encoding of each of the seven bounded
-/// types, so a change to a serde attribute (dropping `transparent`, changing
-/// `try_from`, altering `into`) is caught by a byte comparison before CI sees
-/// the round-trip tests.
+/// Golden bytes: pin identifiers and labels to their exact JSON strings.
 #[test]
-fn golden_bytes_for_all_seven_types() -> Fallible {
+fn golden_bytes_for_identifiers() -> Fallible {
     let correlation = CorrelationId::parse(CORRELATION)?;
     assert_eq!(
         serde_json::to_string(&correlation)?,
@@ -47,6 +50,12 @@ fn golden_bytes_for_all_seven_types() -> Fallible {
         "Label"
     );
 
+    Ok(())
+}
+
+/// Golden bytes: pin slots, memory sizes and context identifiers to numbers.
+#[test]
+fn golden_bytes_for_bounded_numbers() -> Fallible {
     let slot = CapsuleSlot::new(7)?;
     assert_eq!(serde_json::to_string(&slot)?, "7", "CapsuleSlot");
 
@@ -67,6 +76,12 @@ fn golden_bytes_for_all_seven_types() -> Fallible {
         "VsockCid"
     );
 
+    Ok(())
+}
+
+/// Golden bytes: pin capability names and their order in the JSON list.
+#[test]
+fn golden_bytes_for_capability_set() -> Fallible {
     let caps = CapabilitySet::new()
         .with(Capability::FilesystemRead)
         .with(Capability::ZenohIpc);
@@ -95,9 +110,9 @@ fn identifiers_round_trip_as_text() -> Fallible {
     Ok(())
 }
 
-/// Positive: slots, sizes and context identifiers travel as plain numbers.
+/// Positive: slots and capsule memory sizes round-trip as plain numbers.
 #[test]
-fn bounded_numbers_round_trip_as_numbers() -> Fallible {
+fn slots_and_capsule_memory_round_trip_as_numbers() -> Fallible {
     let slot = CapsuleSlot::new(7)?;
     assert_eq!(serde_json::to_string(&slot)?, "7");
     assert_eq!(serde_json::from_str::<CapsuleSlot>("7")?, slot);
@@ -106,6 +121,12 @@ fn bounded_numbers_round_trip_as_numbers() -> Fallible {
     let text = serde_json::to_string(&limit)?;
     assert_eq!(serde_json::from_str::<CapsuleMemoryLimit>(&text)?, limit);
 
+    Ok(())
+}
+
+/// Positive: guest memory sizes and context identifiers round-trip as numbers.
+#[test]
+fn guest_memory_and_context_identifiers_round_trip_as_numbers() -> Fallible {
     let guest = GuestMemoryMib::new(4)?;
     assert_eq!(serde_json::to_string(&guest)?, "4");
     assert_eq!(serde_json::from_str::<GuestMemoryMib>("4")?, guest);

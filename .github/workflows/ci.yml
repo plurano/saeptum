@@ -164,6 +164,10 @@ jobs:
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_planted_crates.py
 
+      - name: Check function complexity
+        if: github.event.pull_request.draft != true
+        run: make complexity
+
       - name: Selftest the release fetch
         if: github.event.pull_request.draft != true
         run: python3 -B tools/fetch_release.py --selftest

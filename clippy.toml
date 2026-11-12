@@ -1,6 +1,10 @@
 # Clippy linting configuration
 avoid-breaking-exported-api = true
 
+# HISS-04: cap cognitive complexity and function length explicitly.
+cognitive-complexity-threshold = 15
+too-many-lines-threshold = 60
+
 # Every I/O call carries a deadline (HISS-02). The standard Unix listener's
 # accept cannot take one, so a test device built on it hangs when its client
 # never comes; the review of #38 found one.

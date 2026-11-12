@@ -118,17 +118,7 @@ pub fn rust_sources(root: &Path) -> Result<Vec<(String, String)>, Box<dyn std::e
         let Some(directory) = pending.pop() else {
             break;
         };
-        for path in directory_entries(&directory)? {
-            let metadata = path.metadata().map_err(|error| path_error(&path, &error))?;
-            if metadata.is_dir() {
-                pending.push(path);
-            } else if path.extension().is_some_and(|extension| extension == "rs") {
-                let name = relative_name(root, &path)?;
-                let body =
-                    std::fs::read_to_string(&path).map_err(|error| path_error(&path, &error))?;
-                out.push((name, body));
-            }
-        }
+        visit_directory(root, &directory, &mut pending, &mut out)?;
     }
     if !pending.is_empty() {
         return Err(format!(
@@ -142,6 +132,26 @@ pub fn rust_sources(root: &Path) -> Result<Vec<(String, String)>, Box<dyn std::e
     }
     out.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     Ok(out)
+}
+
+/// Visits one directory without changing the walk's directory or entry bounds.
+fn visit_directory(
+    root: &Path,
+    directory: &Path,
+    pending: &mut Vec<PathBuf>,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for path in directory_entries(directory)? {
+        let metadata = path.metadata().map_err(|error| path_error(&path, &error))?;
+        if metadata.is_dir() {
+            pending.push(path);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            let name = relative_name(root, &path)?;
+            let body = std::fs::read_to_string(&path).map_err(|error| path_error(&path, &error))?;
+            out.push((name, body));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
