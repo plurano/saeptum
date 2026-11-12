@@ -117,13 +117,13 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       # The allow-list over the locked graph, then the planted crate under
-      # tools/deny/refused, which the check has to refuse.
+      # tools/deny/fixtures/refused, which the check has to refuse.
       - name: Licence check
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: make licences
 
       # The RustSec advisories over the locked graph, then the planted crate
-      # under tools/deny/advised, which the check has to report.
+      # under tools/deny/fixtures/advised, which the check has to report.
       - name: Advisory check
         if: github.event.pull_request.draft != true && steps.manifest.outputs.present == 'true'
         run: make advisories
@@ -149,6 +149,20 @@ jobs:
       - name: Refuse a pull-request job the ruleset does not require
         if: github.event.pull_request.draft != true
         run: python3 -B tools/check_required_checks.py
+
+      # Planted crates must sit under a fixtures directory so the engine does
+      # not read them as library nodes. Python and git only, so no Cargo
+      # workspace is needed. No macOS or Windows leg: the check reads git's
+      # tracked tree, which is the same on every host, through git's
+      # '/'-separated paths, pathlib and explicit UTF-8, and its selftest
+      # builds its scratch repositories the same way.
+      - name: Selftest the planted-crate check
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_planted_crates.py --selftest
+
+      - name: Refuse a planted crate outside a fixtures directory
+        if: github.event.pull_request.draft != true
+        run: python3 -B tools/check_planted_crates.py
 
       - name: Selftest the release fetch
         if: github.event.pull_request.draft != true
