@@ -104,48 +104,12 @@ pub fn filled_registry(count: usize) -> Result<CapsuleRegistry, Box<dyn std::err
     Ok(registry)
 }
 
-/// Scalar bound on directories visited and entries read per directory.
-pub const WALK_BOUND: usize = 64;
+/// Shared fail-closed source walker.
+#[allow(unused_imports)]
+pub use test_support::rust_sources;
 
 /// Scalar bound on the lines read from any one source file.
 pub const LINE_BOUND: usize = 4096;
-
-/// Returns the `.rs` files under `root`, as (file name, body) pairs.
-///
-/// The walk is iterative and doubly bounded: at most [`WALK_BOUND`]
-/// directories and at most [`WALK_BOUND`] entries per directory.
-///
-/// # Errors
-///
-/// Returns the first read failure, so a sweep cannot pass by reading nothing.
-pub fn rust_sources(
-    root: &std::path::Path,
-) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
-    for _ in 0..WALK_BOUND {
-        let Some(directory) = stack.pop() else { break };
-        for entry in std::fs::read_dir(&directory)?.take(WALK_BOUND) {
-            let path = entry?.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|ext| ext != "rs") {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .map(|raw| raw.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            out.push((name, std::fs::read_to_string(&path)?));
-        }
-    }
-    if out.is_empty() {
-        return Err(format!("no Rust source was read under {}", root.display()).into());
-    }
-    Ok(out)
-}
 
 /// Returns the `"<file>:<line>: <identifier>"` hits `text` carries.
 fn hits(name: &str, number: usize, text: &str, watched: &[&str]) -> Vec<String> {

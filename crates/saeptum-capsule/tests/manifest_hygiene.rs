@@ -10,7 +10,7 @@
 //! the operating system it moved from**. Each is asserted here rather than
 //! left as prose.
 
-use test_support::{read, workspace_root};
+use test_support::{Fallible, directory_entries, read, workspace_root};
 
 /// The member list is checked against this rather than against a literal
 /// count. A count has to be edited every time a milestone activates a crate,
@@ -18,64 +18,66 @@ use test_support::{read, workspace_root};
 /// one member is added. What actually needs holding is
 /// the invariant behind the count: every crate directory that has a manifest
 /// is a workspace member, and nothing else is.
-fn crate_directories_with_a_manifest() -> Vec<String> {
-    let Some(root) = workspace_root() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(root.join("crates")) else {
-        return Vec::new();
-    };
-    let mut found: Vec<String> = entries
-        .flatten()
-        .take(64)
-        .filter(|entry| entry.path().join("Cargo.toml").is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+fn crate_directories_with_a_manifest() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let root = workspace_root()
+        .ok_or("workspace root not found")?
+        .join("crates");
+    let mut found: Vec<String> = directory_entries(&root)?
+        .iter()
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .filter_map(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
         .collect();
     found.sort_unstable();
-    found
+    Ok(found)
 }
 
 // --- Positive -------------------------------------------------------------
 
 /// Positive: the workspace names this crate as a member.
 #[test]
-fn the_workspace_names_this_crate() {
-    let manifest = read("Cargo.toml");
+fn the_workspace_names_this_crate() -> Fallible {
+    let manifest = read("Cargo.toml")?;
     assert!(!manifest.is_empty(), "the workspace manifest must exist");
     assert!(manifest.contains("\"crates/saeptum-capsule\""));
+    Ok(())
 }
 
 /// Positive: the lock file carries an entry for this crate.
 #[test]
-fn the_lock_file_carries_an_entry_for_this_crate() {
-    let lock = read("Cargo.lock");
+fn the_lock_file_carries_an_entry_for_this_crate() -> Fallible {
+    let lock = read("Cargo.lock")?;
     assert!(!lock.is_empty(), "Cargo.lock must be committed");
     assert!(lock.contains("name = \"saeptum-capsule\""));
+    Ok(())
 }
 
 /// Positive: the crate declares the workspace's own three dependencies and
 /// takes each from the workspace table.
 #[test]
-fn the_crate_declares_the_workspace_dependencies() {
-    let manifest = read("crates/saeptum-capsule/Cargo.toml");
+fn the_crate_declares_the_workspace_dependencies() -> Fallible {
+    let manifest = read("crates/saeptum-capsule/Cargo.toml")?;
     assert!(!manifest.is_empty(), "the crate manifest must exist");
     for expected in ["serde", "serde_json", "thiserror"] {
         assert!(manifest.contains(&format!("{expected}.workspace = true")));
     }
+    Ok(())
 }
 
 // --- Negative -------------------------------------------------------------
 
 /// Negative: the member list is written out, never globbed.
 #[test]
-fn the_member_list_is_written_out_and_not_globbed() {
-    let manifest = read("Cargo.toml");
+fn the_member_list_is_written_out_and_not_globbed() -> Fallible {
+    let manifest = read("Cargo.toml")?;
+    assert!(manifest.contains("\"crates/saeptum-capsule\""));
     for glob in ["crates/*", "crates/**", "\"*\""] {
         assert!(
             !manifest.contains(glob),
             "the member list must be written out, not globbed with {glob}"
         );
     }
+    Ok(())
 }
 
 /// Negative: no engine, monitor or host-operating-system dependency.
@@ -85,8 +87,8 @@ fn the_member_list_is_written_out_and_not_globbed() {
 /// a path back into the operating system this code moved from. Each is
 /// refused.
 #[test]
-fn the_crate_manifest_declares_no_runtime_or_monitor_dependency() {
-    let manifest = read("crates/saeptum-capsule/Cargo.toml");
+fn the_crate_manifest_declares_no_runtime_or_monitor_dependency() -> Fallible {
+    let manifest = read("crates/saeptum-capsule/Cargo.toml")?;
     assert!(!manifest.is_empty(), "the crate manifest must exist");
     for deferred in [
         "wasmtime",
@@ -113,15 +115,17 @@ fn the_crate_manifest_declares_no_runtime_or_monitor_dependency() {
         !manifest.contains("[build-dependencies]"),
         "a build script is how a foreign runtime would arrive"
     );
+    Ok(())
 }
 
 /// Negative: this crate ships a library, so there is no binary target.
 #[test]
-fn the_crate_declares_no_binary_target() {
-    let manifest = read("crates/saeptum-capsule/Cargo.toml");
+fn the_crate_declares_no_binary_target() -> Fallible {
+    let manifest = read("crates/saeptum-capsule/Cargo.toml")?;
     assert!(!manifest.contains("[[bin]]"));
     assert!(manifest.contains("[lib]"));
     assert!(manifest.contains("publish = false"));
+    Ok(())
 }
 
 // --- Boundary -------------------------------------------------------------
@@ -133,15 +137,15 @@ fn the_crate_declares_no_binary_target() {
 /// member and nothing else is, so a new crate cannot be built by the workspace
 /// without being named, and a named member cannot vanish from the tree.
 #[test]
-fn the_workspace_lists_every_crate_with_a_manifest() {
-    let manifest = read("Cargo.toml");
+fn the_workspace_lists_every_crate_with_a_manifest() -> Fallible {
+    let manifest = read("Cargo.toml")?;
     let members: Vec<String> = manifest
         .lines()
         .map(str::trim)
         .filter(|line| line.starts_with("\"crates/"))
         .map(|line| line.trim_matches(|c| c == '"' || c == ',').to_owned())
         .collect();
-    let directories = crate_directories_with_a_manifest();
+    let directories = crate_directories_with_a_manifest()?;
     assert!(!directories.is_empty(), "crates/ must hold manifests");
     assert_eq!(
         members.len(),
@@ -156,16 +160,18 @@ fn the_workspace_lists_every_crate_with_a_manifest() {
             "the member list must name {name}"
         );
     }
+    Ok(())
 }
 
 /// Boundary: the crate inherits the workspace lints rather than restating them.
 #[test]
-fn the_crate_inherits_the_workspace_lints() {
-    let manifest = read("crates/saeptum-capsule/Cargo.toml");
+fn the_crate_inherits_the_workspace_lints() -> Fallible {
+    let manifest = read("crates/saeptum-capsule/Cargo.toml")?;
     assert!(manifest.contains("[lints]"));
     assert!(manifest.contains("workspace = true"));
     assert!(!manifest.contains("[lints.rust]"));
     assert!(!manifest.contains("[lints.clippy]"));
-    let root = read("Cargo.toml");
+    let root = read("Cargo.toml")?;
     assert!(root.contains("unsafe_code = \"forbid\""));
+    Ok(())
 }
