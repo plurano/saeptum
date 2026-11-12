@@ -312,6 +312,23 @@ mod tests {
         Ok(())
     }
 
+    /// A dangling symbolic link has no metadata, so the walk must stop on it
+    /// rather than skip it. Unix only: creating a symbolic link on Windows
+    /// needs a privilege that test runners usually lack.
+    #[cfg(unix)]
+    #[test]
+    fn rust_sources_rejects_dangling_link() -> Fallible {
+        let error = fixture(|root| {
+            std::fs::write(root.join("lib.rs"), "// source")?;
+            std::os::unix::fs::symlink(root.join("absent"), root.join("dangling.rs"))?;
+            Ok(rust_sources(root))
+        })?
+        .err()
+        .ok_or("a dangling link must fail")?;
+        assert!(error.to_string().contains("dangling.rs"));
+        Ok(())
+    }
+
     #[test]
     fn rust_sources_rejects_non_utf8_source() -> Fallible {
         let error = fixture(|root| {
