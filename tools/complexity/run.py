@@ -13,6 +13,7 @@ import shutil
 import subprocess  # nosec B404  # Runs fixed Python argv lists without a shell and with deadlines.
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -113,7 +114,8 @@ def publish_failure_selftest() -> bool:
 
 def cached_selftest() -> bool:
     """An existing key must avoid subprocesses and leave no build directories."""
-    from unittest.mock import patch  # Selftest only; the gate path never loads unittest.
+    # Selftest only; the gate path never loads unittest.
+    from unittest.mock import patch
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -129,14 +131,15 @@ def cached_selftest() -> bool:
 
 def failed_build_selftest(step: str) -> bool:
     """A failing venv or pip step must raise and leave nothing in the cache."""
-    from unittest.mock import patch  # Selftest only; the gate path never loads unittest.
+    # Selftest only; the gate path never loads unittest.
+    from unittest.mock import patch
 
-    def fake_run(argv: list[str], *, timeout: int, check: bool) -> subprocess.CompletedProcess:
+    def fake_run(argv: list[str], *, timeout: int, check: bool) -> types.SimpleNamespace:
         """Fail only `step`, honouring check=True like subprocess.run; timeout must be passed."""
         returncode = int(argv[2] == step)
         if check and returncode:
             raise subprocess.CalledProcessError(returncode, argv)
-        return subprocess.CompletedProcess(argv, returncode)
+        return types.SimpleNamespace(args=argv, returncode=returncode)
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -153,11 +156,12 @@ def failed_build_selftest(step: str) -> bool:
 
 def passthrough_selftest() -> bool:
     """`check` forwards its arguments and exit status; build failures and timeouts exit 2."""
-    from unittest.mock import patch  # Selftest only; the gate path never loads unittest.
+    # Selftest only; the gate path never loads unittest.
+    from unittest.mock import patch
 
     checker = [str(interpreter(Path("venv"), os.name == "nt")), "-I", "-B", str(ROOT / "tools/check_complexity.py")]
     with contextlib.redirect_stderr(io.StringIO()), patch(f"{__name__}.build", return_value=Path("venv")):
-        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 7)) as run:
+        with patch("subprocess.run", return_value=types.SimpleNamespace(returncode=7)) as run:
             status = main(["check", "--selftest"])
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("check", 1)):
             timed_out = main(["check"])
