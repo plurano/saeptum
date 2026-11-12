@@ -274,15 +274,12 @@ jobs:
 
       # macOS and Windows get no leg: saeptum-microvm builds only on Linux
       # (AF_VSOCK through socket2 exists only on Linux and Android), and
-      # every other crate has no OS-conditional item, so its API is the same
-      # on every host. This step fails once an OS-conditional item appears;
-      # the gate then needs a leg per OS.
+      # this refusal covers each gated crate's src/ tree, using the same
+      # selection as semver_scope.py. Integration tests and public-api = false
+      # crates are outside the gated API. An OS-conditional item in gated
+      # sources requires an API gate leg per OS.
       - name: Refuse OS-conditional items
-        run: |
-          if grep -rnE 'cfg(_attr)?\(.*(target_os|target_family|unix|windows)' crates/; then
-            echo "FAIL: OS-conditional code found; run the API gate on each OS it builds on" >&2
-            exit 1
-          fi
+        run: python3 -B tools/semver_scope.py os-conditional
 
       - name: Install cargo-semver-checks
         env:

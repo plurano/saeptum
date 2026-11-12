@@ -34,7 +34,7 @@ mod common;
 
 use std::path::Path;
 
-use common::{LINE_BOUND, rust_sources};
+use common::{Fallible, LINE_BOUND, rust_sources};
 
 /// This file's name, excluded from the scanned test sources.
 const SWEEP_FILE: &str = "public_surface.rs";
@@ -272,27 +272,27 @@ impl Scanner {
 }
 
 /// Returns the distinct names `reader` finds in the crate's `src/`.
-fn collected_names(reader: fn(&str) -> Option<String>) -> Vec<String> {
+fn collected_names(
+    reader: fn(&str) -> Option<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut scanner = Scanner::new(reader);
-    let Ok(sources) = rust_sources(&src) else {
-        return Vec::new();
-    };
+    let sources = rust_sources(&src)?;
     for (_, body) in sources {
         scanner.file(&body);
     }
     scanner.names.sort_unstable();
     scanner.names.dedup();
-    scanner.names
+    Ok(scanner.names)
 }
 
 /// Returns every public name the crate's `src/` declares.
-fn public_names() -> Vec<String> {
+fn public_names() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     collected_names(declared_name)
 }
 
 /// Returns the public names a keyword-only sweep would have collected.
-fn keyword_only_names() -> Vec<String> {
+fn keyword_only_names() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     collected_names(keyword_only_name)
 }
 
@@ -300,12 +300,10 @@ fn keyword_only_names() -> Vec<String> {
 ///
 /// Comments are removed so that naming an item in a doc comment does not count
 /// as exercising it.
-fn test_sources() -> String {
+fn test_sources() -> Result<String, Box<dyn std::error::Error>> {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let mut out = String::new();
-    let Ok(sources) = rust_sources(&tests) else {
-        return out;
-    };
+    let sources = rust_sources(&tests)?;
     for (name, body) in sources {
         if name == SWEEP_FILE {
             continue;
@@ -318,7 +316,7 @@ fn test_sources() -> String {
             out.push('\n');
         }
     }
-    out
+    Ok(out)
 }
 
 /// Returns `true` when `c` may appear inside a Rust identifier.
@@ -344,15 +342,15 @@ fn contains_identifier(text: &str, name: &str) -> bool {
 /// This is the sweep itself. A failure lists the items, so closing it is
 /// mechanical: give the item a triple, or delete the item.
 #[test]
-fn every_public_item_is_named_by_an_integration_test() {
-    let names = public_names();
+fn every_public_item_is_named_by_an_integration_test() -> Fallible {
+    let names = public_names()?;
     assert!(
         names.len() >= MINIMUM_SURFACE,
         "the scanner reported only {} public names, fewer than the {MINIMUM_SURFACE} \
          this crate is known to export; it is reading nothing, not finding nothing",
         names.len()
     );
-    let sources = test_sources();
+    let sources = test_sources()?;
     assert!(
         !sources.is_empty(),
         "no integration test source was read at all"
@@ -366,6 +364,7 @@ fn every_public_item_is_named_by_an_integration_test() {
         missing.is_empty(),
         "public items with no integration-test reference: {missing:?}"
     );
+    Ok(())
 }
 
 // --- Negative -------------------------------------------------------------
@@ -373,8 +372,8 @@ fn every_public_item_is_named_by_an_integration_test() {
 /// Negative: the scanner distinguishes public surface from private helpers,
 /// so the sweep cannot pass by collecting nothing or by collecting everything.
 #[test]
-fn the_scanner_reads_public_surface_and_not_private_helpers() {
-    let names = public_names();
+fn the_scanner_reads_public_surface_and_not_private_helpers() -> Fallible {
+    let names = public_names()?;
     for expected in [
         "MicroVmController",
         "CapsuleRegistry",
@@ -405,6 +404,7 @@ fn the_scanner_reads_public_surface_and_not_private_helpers() {
             "the scanner collected the private helper {private}"
         );
     }
+    Ok(())
 }
 
 /// Negative: a public struct field and a `pub static` are declarations, and
@@ -476,9 +476,9 @@ fn the_identifier_matcher_is_exact_at_both_ends() {
 /// passed at any contribution, zero included. This form runs the same walk
 /// twice, once with the arm and once without, and reads the difference.
 #[test]
-fn the_field_arm_carries_the_floor() {
-    let all = public_names();
-    let keyword_only = keyword_only_names();
+fn the_field_arm_carries_the_floor() -> Fallible {
+    let all = public_names()?;
+    let keyword_only = keyword_only_names()?;
     let contribution = all.len().saturating_sub(keyword_only.len());
     assert_eq!(
         contribution, FIELD_ARM_NAMES,
@@ -494,4 +494,5 @@ fn the_field_arm_carries_the_floor() {
          so dropping the arm would not fail the gate",
         keyword_only.len()
     );
+    Ok(())
 }

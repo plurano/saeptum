@@ -10,7 +10,7 @@
 //! `libc` serves the boot timer's one `unsafe` block alone; the crate's lint
 //! tables are held by `tests/unsafe_exception.rs`.
 
-use test_support::read;
+use test_support::{Fallible, read};
 
 /// The crate's own manifest.
 const MANIFEST: &str = "crates/saeptum-microvm/Cargo.toml";
@@ -19,28 +19,30 @@ const MANIFEST: &str = "crates/saeptum-microvm/Cargo.toml";
 
 /// Positive: the crate is a named member with a lock entry.
 #[test]
-fn the_crate_is_a_locked_member() {
-    assert!(read("Cargo.toml").contains("\"crates/saeptum-microvm\""));
-    assert!(read("Cargo.lock").contains("name = \"saeptum-microvm\""));
+fn the_crate_is_a_locked_member() -> Fallible {
+    assert!(read("Cargo.toml")?.contains("\"crates/saeptum-microvm\""));
+    assert!(read("Cargo.lock")?.contains("name = \"saeptum-microvm\""));
+    Ok(())
 }
 
 /// Positive: every dependency comes from the workspace or the sibling crate.
 #[test]
-fn the_dependencies_are_the_workspace_ones() {
-    let manifest = read(MANIFEST);
+fn the_dependencies_are_the_workspace_ones() -> Fallible {
+    let manifest = read(MANIFEST)?;
     assert!(!manifest.is_empty(), "the crate manifest must exist");
     for expected in ["libc", "serde_json", "socket2", "thiserror"] {
         assert!(manifest.contains(&format!("{expected}.workspace = true")));
     }
     assert!(manifest.contains("saeptum-capsule = { path = \"../saeptum-capsule\" }"));
+    Ok(())
 }
 
 // --- Negative -------------------------------------------------------------
 
 /// Negative: no runtime, binding, build script or host-OS dependency.
 #[test]
-fn the_crate_declares_no_runtime_or_binding() {
-    let manifest = read(MANIFEST);
+fn the_crate_declares_no_runtime_or_binding() -> Fallible {
+    let manifest = read(MANIFEST)?;
     assert!(!manifest.is_empty(), "the crate manifest must exist");
     for refused in [
         "tokio",
@@ -60,34 +62,37 @@ fn the_crate_declares_no_runtime_or_binding() {
     assert!(!manifest.contains("[build-dependencies]"));
     assert!(!manifest.contains("[[bin]]"));
     assert!(manifest.contains("publish = false"));
+    Ok(())
 }
 
 // --- Boundary -------------------------------------------------------------
 
 /// Boundary: `socket2` is pinned once, at the workspace root, and locked.
 #[test]
-fn socket2_is_pinned_once_and_locked() {
-    let root = read("Cargo.toml");
+fn socket2_is_pinned_once_and_locked() -> Fallible {
+    let root = read("Cargo.toml")?;
     let pins = root
         .lines()
         .filter(|line| line.starts_with("socket2 = "))
         .count();
     assert_eq!(pins, 1, "socket2 is pinned exactly once");
     assert!(root.contains("socket2 = { version = \"0.6.5\""));
-    assert!(read("Cargo.lock").contains("name = \"socket2\""));
-    assert!(!read(MANIFEST).contains("socket2 = {"));
+    assert!(read("Cargo.lock")?.contains("name = \"socket2\""));
+    assert!(!read(MANIFEST)?.contains("socket2 = {"));
+    Ok(())
 }
 
 /// Boundary: `libc` is pinned once, at the workspace root, at the version
 /// `socket2` already locks.
 #[test]
-fn libc_is_pinned_once_and_locked() {
-    let root = read("Cargo.toml");
+fn libc_is_pinned_once_and_locked() -> Fallible {
+    let root = read("Cargo.toml")?;
     let pins = root
         .lines()
         .filter(|line| line.starts_with("libc = "))
         .count();
     assert_eq!(pins, 1, "libc is pinned exactly once");
     assert!(root.contains("libc = { version = \"0.2.191\""));
-    assert!(read("Cargo.lock").contains("name = \"libc\"\nversion = \"0.2.191\""));
+    assert!(read("Cargo.lock")?.contains("name = \"libc\"\nversion = \"0.2.191\""));
+    Ok(())
 }
