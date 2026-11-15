@@ -4,6 +4,6 @@
 # Pinned to the stable release `rustup check` reported on 2026-10-16.
 # Read by rustup only; a distribution cargo ignores this file.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"
