@@ -170,8 +170,7 @@ fn refused_values_do_not_decode() {
 
     let id_err = serde_json::from_str::<CorrelationId>("\"\"")
         .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
+        .map_or_default(|error| error.to_string());
     assert!(
         id_err.contains("a bounded correlation identifier"),
         "got: {id_err}"
@@ -179,8 +178,7 @@ fn refused_values_do_not_decode() {
 
     let slot_err = serde_json::from_str::<CapsuleSlot>("0")
         .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
+        .map_or_default(|error| error.to_string());
     assert!(
         slot_err.contains("a capsule slot inside the declared bound"),
         "got: {slot_err}"
@@ -195,8 +193,7 @@ fn an_unknown_capability_is_refused() {
 
     let cap_err = serde_json::from_str::<CapabilitySet>("[\"unknown\"]")
         .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
+        .map_or_default(|error| error.to_string());
     assert!(
         cap_err.contains("a bounded list of capability names"),
         "got: {cap_err}"
@@ -248,8 +245,7 @@ fn a_capability_list_at_its_entry_bound_decodes() {
     let over = ["\"network\""; MAX_CAPABILITY_ENTRIES.saturating_add(1)].join(",");
     let refused = serde_json::from_str::<CapabilitySet>(&format!("[{over}]"))
         .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
+        .map_or_default(|error| error.to_string());
     let expected = format!(
         "invalid length {}",
         MAX_CAPABILITY_ENTRIES.saturating_add(1)
